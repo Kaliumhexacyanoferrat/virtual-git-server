@@ -41,8 +41,8 @@ public sealed class GitPush
     /// </summary>
     /// <remarks>
     /// Messages are sent immediately, so they can be used to report
-    /// progress of long-running operations. Clients pushing with
-    /// <c>--quiet</c> or without support for side bands will not show them.
+    /// progress of long-running operations (e.g. a build triggered by
+    /// the push). Clients without support for side bands will not show them.
     /// </remarks>
     /// <param name="message">The message to be sent (may span multiple lines)</param>
     public ValueTask MessageAsync(string message) => _messenger(message);

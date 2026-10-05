@@ -94,14 +94,15 @@ internal static class ReceivePack
         var pack = reader.Remaining;
 
         var sideband = capabilities.Contains("side-band-64k");
-        var quiet = capabilities.Contains("quiet");
         var report = capabilities.Contains("report-status");
 
         return async stream =>
         {
             async ValueTask SendMessageAsync(string message)
             {
-                if (!sideband || quiet)
+                // sent regardless of "quiet", which git requests whenever it does not
+                // show progress - messages are like the output of hooks, which git shows
+                if (!sideband)
                 {
                     return;
                 }
