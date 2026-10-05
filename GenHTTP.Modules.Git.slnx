@@ -6,4 +6,5 @@
   </Folder>
   <Project Path="Module/GenHTTP.Modules.Git.csproj" />
   <Project Path="Testing/GenHTTP.Modules.Git.Tests.csproj" />
+  <Project Path="Playground/GenHTTP.Modules.Git.Playground.csproj" />
 </Solution>

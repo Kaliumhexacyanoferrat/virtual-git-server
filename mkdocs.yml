@@ -1,0 +1,75 @@
+site_name: Virtual Git Server
+site_description: Serve virtual git repositories from your own data model with GenHTTP.
+site_url: https://kaliumhexacyanoferrat.github.io/virtual-git-server/
+site_author: Andreas Nägeli
+
+repo_name: virtual-git-server
+repo_url: https://github.com/Kaliumhexacyanoferrat/virtual-git-server
+edit_uri: edit/main/docs/
+
+copyright: Copyright &copy; Andreas Nägeli - MIT licensed
+
+theme:
+  name: material
+  logo: assets/icon.png
+  favicon: assets/icon.png
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - content.code.copy
+    - content.code.annotate
+    - navigation.sections
+    - navigation.footer
+    - navigation.top
+    - search.highlight
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: purple
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: purple
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Overview: index.md
+  - Getting Started: getting-started.md
+  - Guide:
+      - How It Works: concepts.md
+      - Serving Content: repositories.md
+      - Accepting Pushes: pushing.md
+      - Hosting: hosting.md
+      - Testing: testing.md
+  - Examples:
+      - Versioned Content: examples/versioned-content.md
+      - Directory Snapshots: examples/snapshots.md
+  - Reference:
+      - Protocol Support: protocol.md

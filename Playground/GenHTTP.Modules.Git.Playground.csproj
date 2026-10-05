@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+
+        <OutputType>Exe</OutputType>
+        <TargetFrameworks>net11.0</TargetFrameworks>
+
+        <IsPackable>false</IsPackable>
+        <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    </PropertyGroup>
+
+    <ItemGroup>
+
+        <PackageReference Include="GenHTTP.Engine.Internal" Version="11.0.5" />
+        <PackageReference Include="GenHTTP.Modules.Practices" Version="11.0.5" />
+
+    </ItemGroup>
+
+    <ItemGroup>
+
+        <ProjectReference Include="..\Module\GenHTTP.Modules.Git.csproj" />
+
+    </ItemGroup>
+
+</Project>
