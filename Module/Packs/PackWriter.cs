@@ -47,6 +47,12 @@ internal readonly struct PackEntry
 internal static class PackWriter
 {
 
+    /// <summary>
+    /// A complete zlib stream without any content, as some versions of
+    /// <see cref="ZLibStream" /> do not write anything if no data is written.
+    /// </summary>
+    private static readonly byte[] EmptyStream = [0x78, 0x9C, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01];
+
     public static async ValueTask WriteAsync(Stream output, IReadOnlyList<PackEntry> entries, CompressionLevel compression)
     {
         using var hashing = new HashingStream(output);
@@ -69,6 +75,12 @@ internal static class PackWriter
             var length = WriteObjectHeader(objectHeader, entry.Type, content.Length);
 
             await hashing.WriteAsync(objectHeader.AsMemory(0, length));
+
+            if (content.IsEmpty)
+            {
+                await hashing.WriteAsync(EmptyStream);
+                continue;
+            }
 
             await using (var zlib = new ZLibStream(hashing, compression, leaveOpen: true))
             {
