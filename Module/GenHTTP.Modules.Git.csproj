@@ -2,8 +2,9 @@
 
     <PropertyGroup>
 
-        <Description>Serves virtual git repositories over smart HTTP from a GenHTTP handler. Clones, fetches and pushes are answered from your own data model - no repository on disk, no git binary.</Description>
-        <PackageTags>GenHTTP HTTP Webserver C# Module Git Smart-HTTP Server Virtual Repository Clone Push</PackageTags>
+        <Title>GenHTTP Virtual Git Server</Title>
+        <Description>Serves virtual git repositories from a GenHTTP handler. Clones, fetches and pushes are answered from your own data model via the smart HTTP protocol - without a repository on disk and without the git binary.</Description>
+        <PackageTags>GenHTTP HTTP Webserver C# Module Git Server Smart-HTTP Virtual Repository Clone Fetch Push Versioning</PackageTags>
         <PackageReadmeFile>README.md</PackageReadmeFile>
 
     </PropertyGroup>

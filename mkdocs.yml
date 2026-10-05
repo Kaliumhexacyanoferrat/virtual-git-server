@@ -11,7 +11,7 @@ copyright: Copyright &copy; Andreas Nägeli - MIT licensed
 
 theme:
   name: material
-  logo: assets/icon.png
+  logo: assets/icon.svg
   favicon: assets/icon.png
   icon:
     repo: fontawesome/brands/github
