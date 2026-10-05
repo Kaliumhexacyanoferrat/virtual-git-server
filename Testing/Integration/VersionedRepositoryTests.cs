@@ -299,4 +299,37 @@ public sealed class VersionedRepositoryTests
         await git.RunAsync("clone", "fsck");
     }
 
+    [TestMethod]
+    [DataRow(0)]
+    [DataRow(2)]
+    public async Task TestRetentionKeepsTheHistoryOfExistingClones(int protocol)
+    {
+        var repository = await CreateAsync(3);
+
+        repository.Retention = 2;
+
+        await using var host = await TestHost.RunAsync(GitServer.Create().Repository(repository));
+
+        using var git = new GitClient(protocol);
+
+        await git.RunAsync(null, "clone", host.GetUrl("/"), "clone");
+
+        // the versions the clone has are deleted while newer ones are saved
+        await repository.SaveVersionAsync(Files(("lambda.cs", "return 4;")), "Version 4");
+        await repository.SaveVersionAsync(Files(("lambda.cs", "return 5;")), "Version 5");
+
+        await git.RunAsync("clone", "pull", "--ff-only");
+
+        Assert.AreEqual("Version 5\nVersion 4\nVersion 3\nVersion 2\nVersion 1\n", await git.RunAsync("clone", "log", "--format=%s"));
+        Assert.AreEqual("false\n", await git.RunAsync("clone", "rev-parse", "--is-shallow-repository"), "the history the clone had is kept");
+
+        await git.RunAsync("clone", "fsck", "--strict");
+
+        // a new clone starts where the repository does
+        await git.RunAsync(null, "clone", host.GetUrl("/"), "fresh");
+
+        Assert.AreEqual("Version 5\nVersion 4\n", await git.RunAsync("fresh", "log", "--format=%s"));
+        Assert.AreEqual("true\n", await git.RunAsync("fresh", "rev-parse", "--is-shallow-repository"));
+    }
+
 }
