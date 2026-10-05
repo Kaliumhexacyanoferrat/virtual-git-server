@@ -1,0 +1,55 @@
+## .NET / Visual Studio / Rider
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+x64/
+x86/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+artifacts/
+
+# User-specific files
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+*.userprefs
+.vs/
+.idea/
+*.sln.iml
+*.DotSettings.user
+_ReSharper*/
+
+# Test results and coverage
+[Tt]est[Rr]esult*/
+*.trx
+*.coverage
+*.coveragexml
+*.opencover.xml
+coverage.cobertura.xml
+
+# NuGet
+*.nupkg
+*.snupkg
+project.lock.json
+project.fragment.lock.json
+*.nuget.props
+*.nuget.targets
+
+# Misc
+**/Properties/launchSettings.json
+*.binlog
+*.log
+*.tmp
+*~
+
+## Documentation (MkDocs)
+site/
+.venv/
+.cache/
+
+## Agents
+CLAUDE.md
+.claude/

@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+
+        <IsPackable>false</IsPackable>
+        <IsTestProject>true</IsTestProject>
+        <GenerateDocumentationFile>false</GenerateDocumentationFile>
+
+    </PropertyGroup>
+
+    <ItemGroup>
+
+        <PackageReference Include="GenHTTP.Testing" Version="11.0.5" />
+        <PackageReference Include="GenHTTP.Modules.Layouting" Version="11.0.5" />
+
+        <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+        <PackageReference Include="MSTest" Version="4.4.1" />
+
+        <PackageReference Include="coverlet.collector" Version="10.0.1">
+            <PrivateAssets>all</PrivateAssets>
+            <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+        </PackageReference>
+
+    </ItemGroup>
+
+    <ItemGroup>
+
+        <ProjectReference Include="..\Module\GenHTTP.Modules.Git.csproj" />
+
+    </ItemGroup>
+
+    <ItemGroup>
+
+        <Using Include="Microsoft.VisualStudio.TestTools.UnitTesting" />
+
+    </ItemGroup>
+
+</Project>

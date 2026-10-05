@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="Directory.Build.props" />
+    <File Path="global.json" />
+    <File Path="README.md" />
+  </Folder>
+  <Project Path="Module/GenHTTP.Modules.Git.csproj" />
+  <Project Path="Testing/GenHTTP.Modules.Git.Tests.csproj" />
+</Solution>
