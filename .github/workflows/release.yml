@@ -3,6 +3,8 @@ name: Release
 on:
   workflow_dispatch:
 
+# publishing uses trusted publishing: the job exchanges a GitHub OIDC token for
+# a short-lived NuGet API key, so no long-lived key is stored in the repository
 permissions:
   contents: read
   id-token: write
@@ -15,6 +17,7 @@ jobs:
 
     runs-on: ubuntu-latest
 
+    # must match the trusted publishing policy on nuget.org
     environment:
       name: production
 
@@ -45,8 +48,15 @@ jobs:
       - name: List gathered packages
         run: ls -l artifacts
 
+      # the key is valid for an hour only, so log in right before publishing
+      - name: Log in to NuGet
+        id: nuget
+        uses: NuGet/login@v1
+        with:
+          user: Kaliumhexacyanoferrat
+
       - name: Publish package to NuGet
         working-directory: artifacts
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_API_KEY: ${{ steps.nuget.outputs.NUGET_API_KEY }}
         run: dotnet nuget push "*.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate
