@@ -53,3 +53,6 @@ site/
 ## Agents
 CLAUDE.md
 .claude/
+
+## Python
+__pycache__/

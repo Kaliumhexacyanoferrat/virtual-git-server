@@ -16,6 +16,7 @@
         <Version>0.1.0</Version>
 
         <Authors>Andreas Nägeli</Authors>
+        <Copyright>Copyright © Andreas Nägeli</Copyright>
 
         <PackageProjectUrl>https://kaliumhexacyanoferrat.github.io/virtual-git-server/</PackageProjectUrl>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
@@ -28,6 +29,9 @@
         <IncludeSymbols>true</IncludeSymbols>
         <SymbolPackageFormat>snupkg</SymbolPackageFormat>
         <Deterministic>true</Deterministic>
+
+        <!-- files generated during the build are not in the repository, so source link cannot point to them -->
+        <EmbedUntrackedSources>true</EmbedUntrackedSources>
 
         <GenerateDocumentationFile>true</GenerateDocumentationFile>
         <NoWarn>CS1591,CS1572,CS1573</NoWarn>
