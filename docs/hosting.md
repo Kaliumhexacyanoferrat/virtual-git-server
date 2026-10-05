@@ -92,7 +92,8 @@ searched for in the newest 10,000 commits of the repository.
 
 ## Engines and concerns
 
-The handler works with all GenHTTP engines. Concerns such as compression or client caching added via `Defaults()` do
+The handler works with all GenHTTP engines and can also be used within an ASP.NET Core application, see
+[ASP.NET Core](aspnet-core.md). Concerns such as compression or client caching added via `Defaults()` do
 not interfere with git: responses are marked as not cacheable, and request bodies compressed by git are detected
 regardless of whether a decompression concern already handled them.
 

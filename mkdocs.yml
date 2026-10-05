@@ -1,5 +1,5 @@
 site_name: Virtual Git Server
-site_description: Serve virtual git repositories from your own data model with GenHTTP.
+site_description: Serve virtual git repositories from your own data model in .NET applications, with GenHTTP or ASP.NET Core.
 site_url: https://kaliumhexacyanoferrat.github.io/virtual-git-server/
 site_author: Andreas Nägeli
 
@@ -67,6 +67,7 @@ nav:
       - Serving Content: repositories.md
       - Accepting Pushes: pushing.md
       - Hosting: hosting.md
+      - ASP.NET Core: aspnet-core.md
       - Testing: testing.md
   - Examples:
       - Versioned Content: examples/versioned-content.md
