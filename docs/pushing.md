@@ -166,3 +166,9 @@ Exceptions thrown by `PushAsync` are logged, and all updates that have not been 
 
 Pushes are processed in memory. The maximum size of a push defaults to 128 MB and can be changed via
 `MaximumPushSize` (see [Hosting](hosting.md#limits)). Clients exceeding the limit receive an HTTP 413 error.
+
+A pushed commit may consist of at most 100,000 files (`MaximumFilesPerCommit`). Every tree object is validated only
+once, and the files of a revision are collected when `revision.Tree` is accessed for the first time, so a push
+referencing the same directory over and over cannot make the server do more work than the objects it contains.
+
+`MessageAsync` may be called concurrently; messages sent after `PushAsync` completed are discarded.

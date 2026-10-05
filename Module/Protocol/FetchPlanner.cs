@@ -9,6 +9,12 @@ namespace GenHTTP.Modules.Git.Protocol;
 internal sealed class FetchRequest
 {
 
+    /// <summary>
+    /// The maximum number of haves or shallow commits accepted per request, as each
+    /// of them may cause the repository to be queried.
+    /// </summary>
+    public const int MaximumObjects = 100_000;
+
     public List<GitObjectId> Wants { get; } = [];
 
     public List<GitObjectId> Haves { get; } = [];
@@ -107,8 +113,7 @@ internal static class FetchPlanner
             }
         }
 
-        // everything the client has, which is cut at its shallow boundaries
-        var owned = await context.GetAncestryAsync(common, request.ClientShallows);
+        var owned = await GetOwnedAsync(context, request, common);
 
         var update = await GetShallowUpdateAsync(context, request);
 
@@ -126,6 +131,16 @@ internal static class FetchPlanner
             // the client has the commit (and its files), but not its parents
             starts.AddRange((await context.GetCommitAsync(commit))!.Parents);
             edges.Add(commit);
+        }
+
+        if (request.IsDeepening)
+        {
+            // the commits sent may not be connected to the ones the client has
+            // (e.g. "fetch --depth 1"), but most of their files will be the same
+            foreach (var commit in common.Take(8))
+            {
+                edges.Add(commit);
+            }
         }
 
         var visited = new HashSet<GitObjectId>();
@@ -232,6 +247,86 @@ internal static class FetchPlanner
     }
 
     /// <summary>
+    /// Collects the commits the client has: everything reachable from the
+    /// common commits, cut at the shallow boundaries of the client.
+    /// </summary>
+    private static async ValueTask<HashSet<GitObjectId>> GetOwnedAsync(RepositoryContext context, FetchRequest request, IReadOnlyList<GitObjectId> common)
+    {
+        var owned = await context.GetAncestryAsync(common, request.ClientShallows);
+
+        foreach (var shallow in request.ClientShallows)
+        {
+            if (await context.GetCommitAsync(shallow) != null)
+            {
+                owned.Add(shallow);
+            }
+        }
+
+        return owned;
+    }
+
+    /// <summary>
+    /// Checks whether every commit the client wants is based on a commit the
+    /// client has, which allows to stop the negotiation and to send a pack.
+    /// </summary>
+    public static async ValueTask<bool> IsReadyAsync(RepositoryContext context, FetchRequest request, IReadOnlyList<GitObjectId> common)
+    {
+        if (common.Count == 0)
+        {
+            return false;
+        }
+
+        var owned = await GetOwnedAsync(context, request, common);
+
+        var connected = new HashSet<GitObjectId>();
+
+        foreach (var want in request.Wants)
+        {
+            var found = false;
+
+            var visited = new HashSet<GitObjectId>();
+
+            var pending = new Stack<GitObjectId>();
+
+            pending.Push(want);
+
+            while (!found && pending.TryPop(out var id))
+            {
+                if (owned.Contains(id) || connected.Contains(id))
+                {
+                    found = true;
+                    break;
+                }
+
+                if (!visited.Add(id))
+                {
+                    continue;
+                }
+
+                var commit = await context.GetCommitAsync(id);
+
+                if (commit != null)
+                {
+                    foreach (var parent in commit.Parents)
+                    {
+                        pending.Push(parent);
+                    }
+                }
+            }
+
+            if (!found)
+            {
+                return false;
+            }
+
+            // allows wants based on other wants to stop early
+            connected.Add(want);
+        }
+
+        return true;
+    }
+
+    /// <summary>
     /// Computes the changes to the shallow boundaries of the client
     /// caused by a request to deepen (or shorten) its history.
     /// </summary>
@@ -255,11 +350,24 @@ internal static class FetchPlanner
             }
         }
 
+        // "fetch --unshallow" asks for everything, including the history
+        // behind shallow commits not reachable from the wanted commits
+        var infinite = request.Depth == int.MaxValue && !request.DeepenRelative && request.DeepenSince == null && request.DeepenNot.Count == 0;
+
         foreach (var commit in request.ClientShallows)
         {
             if (region.Contains(commit) && !boundaries.Contains(commit))
             {
                 unshallow.Add(commit);
+            }
+            else if (infinite && !region.Contains(commit))
+            {
+                var known = await context.GetCommitAsync(commit);
+
+                if (known != null && known.Parents.Count > 0 && await context.GetParentsAsync(known) != null)
+                {
+                    unshallow.Add(commit);
+                }
             }
         }
 
@@ -312,7 +420,7 @@ internal static class FetchPlanner
                 }
             }
 
-            limit++;
+            limit = limit == int.MaxValue ? limit : limit + 1;
         }
         else
         {

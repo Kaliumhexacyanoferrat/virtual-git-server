@@ -87,7 +87,9 @@ public sealed class GitServerHandler : IHandler
                 name = name[..^4];
             }
 
-            if (name.Length == 0)
+            // the name is URL decoded, so it could contain separators or refer
+            // to parent directories - which is never a valid repository name
+            if (name.Length == 0 || name is "." or ".." || name.AsSpan().IndexOfAny("/\\\0") >= 0 || name.Any(char.IsControl))
             {
                 return null;
             }

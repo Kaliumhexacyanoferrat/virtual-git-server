@@ -28,6 +28,15 @@ internal static class DeltaApplier
             throw new InvalidDataException("Invalid delta: resulting object exceeds the allowed size");
         }
 
+        // every byte of instructions produces at most 127 inserted bytes or a
+        // copy of (a part of) the source, so larger sizes cannot be valid
+        var bound = (long)(delta.Length - position) * Math.Max(127, Math.Min(source.Length, 0xFFFFFF));
+
+        if (targetSize > bound)
+        {
+            throw new InvalidDataException("Invalid delta: resulting size exceeds what the instructions can produce");
+        }
+
         var target = new byte[targetSize];
 
         var written = 0;

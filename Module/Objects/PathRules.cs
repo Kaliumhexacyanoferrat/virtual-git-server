@@ -38,6 +38,10 @@ internal static class PathRules
                 case '\\':
                     reason = $"'{name}' must not contain a backslash";
                     return false;
+                case ':':
+                    // alternate data streams on Windows (".git::$INDEX_ALLOCATION")
+                    reason = $"'{name}' must not contain a colon";
+                    return false;
                 case '\0':
                     reason = $"'{name}' must not contain a NUL character";
                     return false;
@@ -94,7 +98,7 @@ internal static class PathRules
 
     /// <summary>
     /// Checks whether the given name would be treated as the ".git"
-    /// directory by git on any platform.
+    /// directory on any platform.
     /// </summary>
     /// <remarks>
     /// Windows ignores trailing dots and spaces and knows the short
@@ -102,23 +106,16 @@ internal static class PathRules
     /// </remarks>
     private static bool IsDotGit(ReadOnlySpan<char> name)
     {
-        Span<char> buffer = stackalloc char[Math.Min(name.Length, 256)];
+        var buffer = name.Length <= 256 ? stackalloc char[name.Length] : new char[name.Length];
 
         var length = 0;
 
         foreach (var c in name)
         {
-            if (IsHfsIgnorable(c))
+            if (!IsHfsIgnorable(c))
             {
-                continue;
+                buffer[length++] = c;
             }
-
-            if (length == buffer.Length)
-            {
-                return false;
-            }
-
-            buffer[length++] = c;
         }
 
         var normalized = buffer[..length].TrimEnd(". ");

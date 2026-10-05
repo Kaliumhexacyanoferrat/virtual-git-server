@@ -38,7 +38,17 @@ public sealed class ValidationTests
     [DataRow(".g‌it")]
     [DataRow("a\\b")]
     [DataRow("")]
+    [DataRow(".git::$INDEX_ALLOCATION")]
+    [DataRow("a:b")]
     public void TestInvalidFileNames(string name) => Assert.IsFalse(PathRules.IsValidName(name, out _));
+
+    [TestMethod]
+    public void TestLongDotGitAliases()
+    {
+        Assert.IsFalse(PathRules.IsValidName(".git" + new string('.', 300), out _));
+        Assert.IsFalse(PathRules.IsValidName(".git" + new string(' ', 300), out _));
+        Assert.IsTrue(PathRules.IsValidName(new string('a', 300), out _));
+    }
 
     [TestMethod]
     [DataRow(".gitignore")]

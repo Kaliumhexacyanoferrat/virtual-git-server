@@ -34,6 +34,15 @@ public sealed class ObjectIdTests
     }
 
     [TestMethod]
+    public void TestHashCodeCoversAllBytes()
+    {
+        var first = GitObjectId.Parse("0123456789abcdef0123456789abcdef00000001");
+        var second = GitObjectId.Parse("0123456789abcdef0123456789abcdef00000002");
+
+        Assert.AreNotEqual(first.GetHashCode(), second.GetHashCode());
+    }
+
+    [TestMethod]
     public void TestOrdering()
     {
         var low = GitObjectId.Parse("0000000000000000000000000000000000000001");

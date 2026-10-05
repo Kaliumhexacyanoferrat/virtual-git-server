@@ -24,6 +24,8 @@ public sealed class GitServerBuilder : IHandlerBuilder<GitServerBuilder>
 
     private long _maximumPushSize = 128L * 1024 * 1024;
 
+    private int _maximumFilesPerCommit = 100_000;
+
     private long _maximumRequestSize = 16L * 1024 * 1024;
 
     private long _contentCacheSize = 64L * 1024 * 1024;
@@ -81,7 +83,9 @@ public sealed class GitServerBuilder : IHandlerBuilder<GitServerBuilder>
     /// if the handler is added to a layout as "git").
     /// </summary>
     /// <remarks>
-    /// The function receives the name of the repository without a ".git" suffix.
+    /// The function receives the URL decoded name of the repository without a ".git"
+    /// suffix. Names that are empty, contain slashes, backslashes or control characters,
+    /// or refer to "." or ".." are not passed to the function but answered with "not found".
     /// Return <c>null</c> to respond with "not found". To deny access,
     /// throw a <see cref="ProviderException" /> with an appropriate status.
     /// </remarks>
@@ -127,6 +131,24 @@ public sealed class GitServerBuilder : IHandlerBuilder<GitServerBuilder>
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(bytes);
 
         _maximumPushSize = bytes;
+        return this;
+    }
+
+    /// <summary>
+    /// The maximum number of files a pushed commit may consist of
+    /// (defaults to 100,000).
+    /// </summary>
+    /// <remarks>
+    /// Protects the server from pushes that reference the same directory
+    /// over and over again, which take little space but expand to a huge
+    /// number of files.
+    /// </remarks>
+    /// <param name="count">The maximum number of files</param>
+    public GitServerBuilder MaximumFilesPerCommit(int count)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(count);
+
+        _maximumFilesPerCommit = count;
         return this;
     }
 
@@ -189,7 +211,7 @@ public sealed class GitServerBuilder : IHandlerBuilder<GitServerBuilder>
             throw new BuilderMissingPropertyException("Repository");
         }
 
-        var options = new GitServerOptions(_agent, _maximumPushSize, _maximumRequestSize, _contentCacheSize, _compression);
+        var options = new GitServerOptions(_agent, _maximumPushSize, _maximumFilesPerCommit, _maximumRequestSize, _contentCacheSize, _compression);
 
         return Concerns.Chain(_concerns, new GitServerHandler(_resolver, _namedResolver, options));
     }

@@ -40,7 +40,12 @@ public sealed class GitSignature
     /// <param name="name">The name of the person (must not be empty)</param>
     /// <param name="email">The email address of the person</param>
     /// <param name="when">The point in time</param>
-    public GitSignature(string name, string email, DateTimeOffset when)
+    public GitSignature(string name, string email, DateTimeOffset when) : this(name, email, when, false)
+    {
+
+    }
+
+    private GitSignature(string name, string email, DateTimeOffset when, bool allowEmptyName)
     {
         ArgumentNullException.ThrowIfNull(name);
         ArgumentNullException.ThrowIfNull(email);
@@ -48,7 +53,7 @@ public sealed class GitSignature
         name = name.Trim();
         email = email.Trim();
 
-        if (name.Length == 0)
+        if (name.Length == 0 && !allowEmptyName)
         {
             throw new ArgumentException("The name of a signature must not be empty", nameof(name));
         }
@@ -109,11 +114,6 @@ public sealed class GitSignature
 
         var parts = date.Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
-        if (name.Length == 0)
-        {
-            throw new FormatException("Malformed signature: missing name");
-        }
-
         if (parts.Length != 2 || !long.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var seconds))
         {
             throw new FormatException("Malformed signature: invalid date");
@@ -146,7 +146,8 @@ public sealed class GitSignature
 
         try
         {
-            return new GitSignature(name, email, when);
+            // git accepts commits without a name (e.g. in imported histories)
+            return new GitSignature(name, email, when, true);
         }
         catch (ArgumentException e)
         {

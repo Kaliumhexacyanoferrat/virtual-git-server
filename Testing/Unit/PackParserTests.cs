@@ -89,6 +89,31 @@ public sealed class PackParserTests
     }
 
     [TestMethod]
+    public void TestDeclaredSizesAreBoundedByData()
+    {
+        // a tiny pack claiming to contain a 512 MB object
+        var header = new byte[16];
+
+        var length = PackWriter.WriteObjectHeader(header, GitObjectType.Blob, 512L * 1024 * 1024);
+
+        var pack = new List<byte>();
+
+        pack.AddRange("PACK"u8.ToArray());
+        pack.AddRange(new byte[] { 0, 0, 0, 2, 0, 0, 0, 1 });
+        pack.AddRange(header.Take(length));
+        pack.AddRange(new byte[] { 0x78, 0x9C, 0x03, 0x00 });
+        pack.AddRange(System.Security.Cryptography.SHA1.HashData(pack.ToArray()));
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+
+        var exception = Assert.ThrowsExactly<InvalidDataException>(() => PackParser.Parse(pack.ToArray(), PackLimits.FromPushSize(1024L * 1024 * 1024)));
+
+        StringAssert.Contains(exception.Message, "exceeds the compressed data");
+
+        Assert.IsLessThan(1024 * 1024, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [TestMethod]
     public async Task TestWrittenPacksCanBeIndexedByGit()
     {
         using var git = new GitClient();

@@ -43,6 +43,9 @@ public interface IGitRepository
     /// been truncated (e.g. old versions have been deleted), returning
     /// <c>null</c> for a parent of a commit makes this commit the shallow
     /// boundary of the repository, which clients can handle.
+    /// Clients can fetch every commit this method returns by its id, even if no
+    /// reference points to it - so do not return commits that must not be
+    /// accessible anymore (e.g. of deleted drafts).
     /// </remarks>
     /// <param name="id">The id of the commit to be fetched</param>
     /// <returns>The commit with the given id, or null if it does not exist</returns>

@@ -101,6 +101,12 @@ internal static class UploadPack
             }
         }
 
+        // as git does, ignore prefixes if there are too many of them to be checked efficiently
+        if (prefixes.Count > 65)
+        {
+            prefixes.Clear();
+        }
+
         bool Matches(string name) => prefixes.Count == 0 || prefixes.Any(p => name.StartsWith(p, StringComparison.Ordinal));
 
         var references = await context.GetReferencesAsync();
@@ -165,6 +171,13 @@ internal static class UploadPack
                 writer.Line($"ACK {id}");
             }
 
+            if (!await FetchPlanner.IsReadyAsync(context, request, common))
+            {
+                // some of the wanted commits are not connected to what the client has yet
+                writer.Flush();
+                return writer.CopyToAsync;
+            }
+
             writer.Line("ready").Delimiter();
         }
 
@@ -212,6 +225,11 @@ internal static class UploadPack
             if (text.StartsWith("want ", StringComparison.Ordinal) && request.Wants.Count == 0)
             {
                 var parts = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+                if (parts.Length < 2)
+                {
+                    throw new ProtocolException($"invalid line '{text}'");
+                }
 
                 foreach (var capability in parts.Skip(2))
                 {
@@ -293,7 +311,7 @@ internal static class UploadPack
 
             if (!request.Done)
             {
-                if (common.Count > 0)
+                if (await FetchPlanner.IsReadyAsync(context, request, common))
                 {
                     writer.Line($"ACK {common[^1]} ready");
                 }
@@ -354,9 +372,21 @@ internal static class UploadPack
                 break;
             case "have":
                 request.Haves.Add(ParseId(value));
+
+                if (request.Haves.Count > FetchRequest.MaximumObjects)
+                {
+                    throw new ProtocolException("too many haves");
+                }
+
                 break;
             case "shallow":
                 request.ClientShallows.Add(ParseId(value));
+
+                if (request.ClientShallows.Count > FetchRequest.MaximumObjects)
+                {
+                    throw new ProtocolException("too many shallow commits");
+                }
+
                 break;
             case "deepen":
                 {

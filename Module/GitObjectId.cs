@@ -226,7 +226,11 @@ public readonly struct GitObjectId : IEquatable<GitObjectId>, IComparable<GitObj
 
     public override bool Equals(object? obj) => obj is GitObjectId other && Equals(other);
 
-    public override int GetHashCode() => (int)_first ^ (int)(_first >> 32) ^ (int)_second;
+    /// <remarks>
+    /// Uses a randomly seeded hash, as ids sent by clients end up in hash
+    /// tables and could otherwise be chosen to collide.
+    /// </remarks>
+    public override int GetHashCode() => HashCode.Combine(_first, _second, _third);
 
     public int CompareTo(GitObjectId other)
     {

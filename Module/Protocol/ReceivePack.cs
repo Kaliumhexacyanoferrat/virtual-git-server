@@ -98,6 +98,10 @@ internal static class ReceivePack
 
         return async stream =>
         {
+            using var messageLock = new SemaphoreSlim(1, 1);
+
+            var completed = false;
+
             async ValueTask SendMessageAsync(string message)
             {
                 // sent regardless of "quiet", which git requests whenever it does not
@@ -116,8 +120,24 @@ internal static class ReceivePack
 
                 writer.Band(2, Encoding.UTF8.GetBytes(message));
 
-                await writer.CopyToAsync(stream);
-                await stream.FlushAsync();
+                // repositories might send messages concurrently or after
+                // the push has been processed, which must not corrupt the response
+                await messageLock.WaitAsync();
+
+                try
+                {
+                    if (completed)
+                    {
+                        return;
+                    }
+
+                    await writer.CopyToAsync(stream);
+                    await stream.FlushAsync();
+                }
+                finally
+                {
+                    messageLock.Release();
+                }
             }
 
             string? unpackError = null;
@@ -139,6 +159,12 @@ internal static class ReceivePack
                     command.Error ??= "internal server error";
                 }
             }
+
+            await messageLock.WaitAsync();
+
+            completed = true;
+
+            messageLock.Release();
 
             var result = new PktLineWriter();
 
@@ -195,7 +221,7 @@ internal static class ReceivePack
             throw new InvalidDataException("missing pack");
         }
 
-        var objects = new PushedObjects(context, received);
+        var objects = new PushedObjects(context, received, options.MaximumFilesPerCommit);
 
         var references = await context.GetReferencesAsync();
 
@@ -327,9 +353,9 @@ internal static class ReceivePack
 
         foreach (var commit in ordered)
         {
-            var hints = commit.Parents.Where(existing.Contains);
+            await objects.ValidateAsync(commit, commit.Parents.Where(existing.Contains));
 
-            revisions.Add(new GitRevision(commit, await objects.GetTreeAsync(commit, hints)));
+            revisions.Add(new GitRevision(commit, () => objects.GetTree(commit)));
         }
 
         var fastForward = command.OldId.IsZero || await IsAncestorAsync(context, created, command.OldId, command.NewId);

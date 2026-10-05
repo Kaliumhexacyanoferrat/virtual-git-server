@@ -66,6 +66,10 @@ The server calls this method for every commit it needs to traverse, but also for
 not exist (e.g. local commits of the client that have not been pushed). Return `null` for unknown ids. Index the
 commit ids in your storage so that these lookups are cheap.
 
+!!! warning "Every commit you return can be fetched"
+    Clients can fetch any commit this method returns by its id, even if no branch or tag points to it. Return `null`
+    for commits that must not be accessible anymore, e.g. the commits of a deleted draft.
+
 ### Creating commits
 
 Create a commit when your data changes, not when it is requested (see
@@ -125,8 +129,9 @@ public async ValueTask<GitTree> GetTreeAsync(GitCommit commit)
 Files can be regular files (default), executables (`GitFileMode.Executable`) or symbolic links
 (`GitFileMode.Symlink`, with the content being the target path). Empty directories cannot be represented in git.
 
-Paths are validated: names such as `..`, `.git` (in any spelling git treats as `.git` on Windows or macOS) or names
-containing backslashes are rejected, as clients would refuse to check them out.
+Paths are validated: names such as `..`, `.git` (in any spelling treated as `.git` on Windows or macOS) or names
+containing backslashes or colons are rejected, as clients would refuse to check them out on some platforms and
+providers writing pushed files to disk could be tricked into writing to unexpected locations.
 
 ### Known blob ids
 

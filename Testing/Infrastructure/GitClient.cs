@@ -94,7 +94,24 @@ public sealed class GitClient : IDisposable
     /// </summary>
     public async Task<GitResult> TryRunAsync(string? directory, params string[] arguments) => await TryRunAsync(directory, null, arguments);
 
-    public async Task<GitResult> TryRunAsync(string? directory, IDictionary<string, string>? environment, params string[] arguments)
+    public async Task<GitResult> TryRunAsync(string? directory, IDictionary<string, string>? environment, params string[] arguments) => await TryRunAsync(directory, environment, null, arguments);
+
+    /// <summary>
+    /// Runs git, passing the given input via stdin.
+    /// </summary>
+    public async Task<string> RunWithInputAsync(string? directory, string input, params string[] arguments)
+    {
+        var result = await TryRunAsync(directory, null, input, arguments);
+
+        if (!result.Success)
+        {
+            Assert.Fail($"git {string.Join(' ', arguments)} failed with {result}");
+        }
+
+        return result.Output;
+    }
+
+    private async Task<GitResult> TryRunAsync(string? directory, IDictionary<string, string>? environment, string? input, params string[] arguments)
     {
         var info = new ProcessStartInfo("git")
         {
@@ -134,6 +151,11 @@ public sealed class GitClient : IDisposable
         }
 
         using var process = Process.Start(info) ?? throw new InvalidOperationException("Unable to start git");
+
+        if (input != null)
+        {
+            await process.StandardInput.WriteAsync(input);
+        }
 
         process.StandardInput.Close();
 

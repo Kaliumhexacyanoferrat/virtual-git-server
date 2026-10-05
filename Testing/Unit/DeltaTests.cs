@@ -38,4 +38,15 @@ public sealed class DeltaTests
         Assert.ThrowsExactly<InvalidDataException>(() => DeltaApplier.Apply(source, [5, 100], 10));
     }
 
+    [TestMethod]
+    public void TestImpossibleTargetSizesAreRejected()
+    {
+        // an empty base and a delta claiming to produce 1 GB
+        byte[] delta = [0x00, 0x80, 0x80, 0x80, 0x80, 0x04, 0x01, (byte)'x'];
+
+        var exception = Assert.ThrowsExactly<InvalidDataException>(() => DeltaApplier.Apply([], delta, long.MaxValue));
+
+        StringAssert.Contains(exception.Message, "exceeds what the instructions can produce");
+    }
+
 }

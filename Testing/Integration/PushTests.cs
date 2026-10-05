@@ -37,13 +37,16 @@ public sealed class PushTests
     #region Tests
 
     [TestMethod]
-    public async Task TestPushedCommitsCanBeCloned()
+    [DataRow(0)]
+    [DataRow(1)]
+    [DataRow(2)]
+    public async Task TestPushedCommitsCanBeCloned(int protocol)
     {
         var repository = await Repositories.WithHistoryAsync(1);
 
         await using var host = await TestHost.RunAsync(GitServer.Create().Repository(repository));
 
-        using var git = new GitClient();
+        using var git = new GitClient(protocol);
 
         await git.RunAsync(null, "clone", host.GetUrl("/"), "first");
 

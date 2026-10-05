@@ -27,7 +27,7 @@ limitations.
 | `--shallow-since`, `--shallow-exclude`          | Supported                                                     |
 | `--deepen`, `--unshallow`                       | Supported                                                     |
 | Unborn HEAD                                     | Supported in v2, clients learn the default branch of empty repositories |
-| Requesting commits by id                        | Supported for all commits the repository resolves             |
+| Requesting commits by id                        | Supported for all commits the repository resolves (not only reachable ones) |
 | Partial clones (`--filter`)                     | Not supported                                                 |
 | Annotated tags (`include-tag`, peeled refs)     | Not supported                                                 |
 | `wait-for-done`, `packfile-uris`, `bundle-uri`  | Not supported (clients do not depend on them)                 |
@@ -62,7 +62,7 @@ for, computing deltas on every request would cost more than the bandwidth it sav
 | Symbolic links               | Supported (mode `120000`)                                                  |
 | Empty directories            | Not representable in git                                                   |
 | Submodules                   | Not supported (mode `160000`)                                              |
-| File names                   | Valid UTF-8, no `..`, `.git` (in any spelling), backslashes or NUL characters |
+| File names                   | Valid UTF-8, no `..`, `.git` (in any spelling), backslashes, colons or NUL characters |
 | Signed commits               | Supported, signatures are kept as part of the commit                       |
 
 ## Compatibility

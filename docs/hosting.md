@@ -73,10 +73,15 @@ and return an instance that only implements `IGitRepository` for read-only users
 | Method                     | Default    | Description                                                                         |
 |----------------------------|------------|-------------------------------------------------------------------------------------|
 | `MaximumPushSize(bytes)`   | 128 MB     | The maximum size of a push. Pushes are processed in memory.                         |
+| `MaximumFilesPerCommit(n)` | 100,000    | The maximum number of files of a pushed commit.                                     |
 | `MaximumRequestSize(bytes)`| 16 MB      | The maximum size of a fetch request, which lists commits the client wants and has.  |
 | `ContentCache(bytes)`      | 64 MB      | How much file content is kept in memory per request to avoid reading files twice.   |
 
-Requests exceeding a limit are answered with HTTP 413.
+Requests exceeding a size limit are answered with HTTP 413, pushed commits with too many files are rejected.
+
+Additionally, the server protects itself against crafted requests: a fetch request may list at most 100,000 commits
+the client has, pack headers may not claim more data than they contain, and objects the client did not send are only
+searched for in the newest 10,000 commits of the repository.
 
 ## Other settings
 

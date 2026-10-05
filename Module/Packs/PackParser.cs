@@ -190,6 +190,13 @@ internal static class PackParser
                 throw new InvalidDataException("Pack contains an object exceeding the allowed size");
             }
 
+            // deflate compresses by a factor of 1032 at most, so a size beyond
+            // that cannot be valid and must not be allocated
+            if (size > (long)(end - position) * 1032 + 64)
+            {
+                throw new InvalidDataException("Invalid pack: object size exceeds the compressed data");
+            }
+
             total += size;
 
             if (total > limits.MaximumTotalSize)
