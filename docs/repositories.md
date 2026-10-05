@@ -154,8 +154,10 @@ against its id.
 ## Truncated histories
 
 If old commits are deleted, return `null` from `GetCommitAsync` for them. The oldest remaining commit then acts as
-the shallow boundary of the repository, and clients receive a shallow clone. References must only point to commits
-that still exist.
+the shallow boundary of the repository, and clients receive a shallow clone. Clients that cloned before keep their
+history and keep fetching: the server recognizes the deleted parents of the remaining commits by their ids (as the
+remaining commits name them), and does not cut off a client that still has them. References must only point to
+commits that still exist.
 
 ## Read-only access
 

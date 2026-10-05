@@ -20,6 +20,14 @@ internal sealed class RepositoryContext(IGitRepository repository, ContentCache 
 
     private readonly Dictionary<GitObjectId, MaterializedTree> _trees = new();
 
+    private HashSet<GitObjectId>? _truncated;
+
+    /// <summary>
+    /// How many commits are searched for the ones the history refers to but
+    /// does not have.
+    /// </summary>
+    private const int SearchLimit = 10_000;
+
     #region Get-/Setters
 
     public IGitRepository Repository => repository;
@@ -145,6 +153,55 @@ internal sealed class RepositoryContext(IGitRepository repository, ContentCache 
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// The commits the history of the repository refers to but does not have
+    /// (anymore): the parents of the commits it starts with, if it has been
+    /// truncated.
+    /// </summary>
+    /// <remarks>
+    /// A client that cloned before the history was truncated still has them.
+    /// Knowing them lets the server tell this client that it has the history
+    /// before a truncation, instead of cutting it off as shallow - which git
+    /// refuses for a clone that is not shallow. Only the newest commits of
+    /// the repository are searched, as for the objects a client did not send.
+    /// </remarks>
+    public async ValueTask<IReadOnlySet<GitObjectId>> GetTruncatedAsync()
+    {
+        if (_truncated != null)
+        {
+            return _truncated;
+        }
+
+        var result = new HashSet<GitObjectId>();
+
+        var visited = new HashSet<GitObjectId>();
+
+        var pending = new Stack<GitObjectId>((await GetReferencesAsync()).Select(r => r.Target));
+
+        while (pending.TryPop(out var id) && visited.Count < SearchLimit)
+        {
+            if (!visited.Add(id))
+            {
+                continue;
+            }
+
+            var commit = await GetCommitAsync(id);
+
+            if (commit == null)
+            {
+                result.Add(id);
+                continue;
+            }
+
+            foreach (var parent in commit.Parents)
+            {
+                pending.Push(parent);
+            }
+        }
+
+        return _truncated = result;
     }
 
     /// <summary>

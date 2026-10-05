@@ -89,7 +89,15 @@ internal static class FetchPlanner
 
         foreach (var have in haves)
         {
-            if (seen.Add(have) && await context.GetCommitAsync(have) != null)
+            if (!seen.Add(have))
+            {
+                continue;
+            }
+
+            // also the commits the history no longer has, which a client that
+            // cloned before it was truncated still has - acknowledged, it
+            // keeps saying so for the rest of the negotiation
+            if (await context.GetCommitAsync(have) != null || (await context.GetTruncatedAsync()).Contains(have))
             {
                 result.Add(have);
             }
@@ -114,6 +122,8 @@ internal static class FetchPlanner
         }
 
         var owned = await GetOwnedAsync(context, request, common);
+
+        var haves = request.Haves.ToHashSet();
 
         var update = await GetShallowUpdateAsync(context, request);
 
@@ -172,8 +182,10 @@ internal static class FetchPlanner
 
             if (parents == null)
             {
-                // the history of the repository ends here
-                if (!request.ClientShallows.Contains(id) && !shallow.Contains(id))
+                // the history of the repository ends here - unless the client
+                // still has what came before (e.g. a clone made before old
+                // versions were deleted), which it would refuse to cut off
+                if (!request.ClientShallows.Contains(id) && !shallow.Contains(id) && !HasHistory(commit, haves, owned))
                 {
                     shallow.Add(id);
                 }
@@ -247,6 +259,20 @@ internal static class FetchPlanner
     }
 
     /// <summary>
+    /// Whether the client has the history before a commit whose parents the
+    /// repository does not have (anymore): it said it has every one of them,
+    /// or they are part of what it has with the common commits.
+    /// </summary>
+    /// <remarks>
+    /// Announcing such a commit as shallow would cut off history the client
+    /// already has, which git refuses ("shallow roots are not allowed to be
+    /// updated") - so a clone made before old commits were deleted could not
+    /// fetch anything newer.
+    /// </remarks>
+    private static bool HasHistory(GitCommit commit, HashSet<GitObjectId> haves, HashSet<GitObjectId> owned)
+        => commit.Parents.Count > 0 && commit.Parents.All(p => haves.Contains(p) || owned.Contains(p));
+
+    /// <summary>
     /// Collects the commits the client has: everything reachable from the
     /// common commits, cut at the shallow boundaries of the client.
     /// </summary>
@@ -259,6 +285,18 @@ internal static class FetchPlanner
             if (await context.GetCommitAsync(shallow) != null)
             {
                 owned.Add(shallow);
+            }
+        }
+
+        // what the history no longer has but the client does: the commits
+        // based on it are connected to what the client has
+        var truncated = await context.GetTruncatedAsync();
+
+        foreach (var commit in common)
+        {
+            if (truncated.Contains(commit))
+            {
+                owned.Add(commit);
             }
         }
 

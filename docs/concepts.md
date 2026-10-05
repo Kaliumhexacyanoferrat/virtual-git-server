@@ -110,4 +110,6 @@ A typical incremental fetch therefore only reads the files of the new commits an
 If your data model deletes old content (e.g. only the newest 50 versions are kept), the oldest remaining commit refers
 to a parent that no longer exists. Return `null` from `GetCommitAsync` for such commits: the server treats the
 repository as shallow and tells clients that the history ends there, exactly like a shallow clone created with
-`git clone --depth`. Clients that already have older commits keep them.
+`git clone --depth`. Clients that already have older commits keep them: a client that says it has the parent of
+the oldest remaining commit is told it has the history before it, so it goes on fetching newer commits as a
+complete clone rather than being cut off as a shallow one (which git refuses).
