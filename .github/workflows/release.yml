@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+
+  publish:
+
+    name: Build & Publish Package
+
+    runs-on: ubuntu-latest
+
+    environment:
+      name: production
+
+    steps:
+
+      - name: Checkout source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: global.json
+
+      - name: Restore dependencies
+        run: dotnet restore GenHTTP.Modules.Git.slnx
+
+      - name: Build solution
+        run: dotnet build GenHTTP.Modules.Git.slnx --configuration Release -p:ContinuousIntegrationBuild=true --no-restore
+
+      - name: Test solution
+        run: dotnet test GenHTTP.Modules.Git.slnx --configuration Release --no-build
+
+      - name: Pack package
+        run: dotnet pack Module/GenHTTP.Modules.Git.csproj --configuration Release --no-build --output ./artifacts
+
+      - name: List gathered packages
+        run: ls -l artifacts
+
+      - name: Publish package to NuGet
+        working-directory: artifacts
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: dotnet nuget push "*.nupkg" --api-key "$NUGET_API_KEY" --source https://api.nuget.org/v3/index.json --skip-duplicate

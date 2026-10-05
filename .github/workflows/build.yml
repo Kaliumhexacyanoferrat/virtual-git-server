@@ -1,0 +1,64 @@
+name: Build
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+
+  build:
+
+    name: Test & Coverage
+
+    runs-on: ubuntu-latest
+
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      DOTNET_ROLL_FORWARD: Major
+
+    steps:
+
+    - name: Checkout
+      uses: actions/checkout@v7
+      with:
+        fetch-depth: 0
+
+    - name: Setup .NET SDK
+      uses: actions/setup-dotnet@v6
+      with:
+        global-json-file: global.json
+
+    - name: Restore tools
+      run: dotnet tool restore
+
+    # the integration tests run the git client against the server
+    - name: Show git version
+      run: git --version
+
+    - name: Begin scan
+      if: env.SONAR_TOKEN != null && env.SONAR_TOKEN != ''
+      run: dotnet sonarscanner begin /k:"virtual-git-server" /o:"kaliumhexacyanoferrat" /d:sonar.token="$SONAR_TOKEN" /d:sonar.host.url="https://sonarcloud.io" /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml" /d:sonar.exclusions="**/bin/**/*,**/obj/**/*,docs/**/*" /d:sonar.branch.name="${GITHUB_REF##*/}" /d:sonar.dotnet.excludeTestProjects=true
+
+    - name: Build project
+      run: dotnet build GenHTTP.Modules.Git.slnx -c Release
+
+    - name: Test project
+      run: dotnet test GenHTTP.Modules.Git.slnx --no-build -c Release --collect:"XPlat Code Coverage" -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
+
+    - name: End scan
+      if: env.SONAR_TOKEN != null && env.SONAR_TOKEN != ''
+      run: dotnet sonarscanner end /d:sonar.token="$SONAR_TOKEN"
+
+    - name: Pack
+      run: dotnet pack Module/GenHTTP.Modules.Git.csproj -c Release --no-build --output ./artifacts
+
+    - name: Upload package
+      uses: actions/upload-artifact@v7
+      with:
+        name: package
+        path: artifacts
+        retention-days: 7
