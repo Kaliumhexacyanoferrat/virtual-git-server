@@ -1,18 +1,27 @@
 # GenHTTP.Modules.Git
 
-Serves **virtual git repositories** from a [GenHTTP](https://genhttp.org/) handler. Clones, fetches and pushes are
-answered from your own data model via the smart HTTP protocol - without a repository on disk and without the `git`
-binary.
+A C# library that turns your .NET application into a **git server for your own data**. Users clone, fetch and push
+with the regular `git` client, while every request is answered from your data model (a database, a blob store, an
+API, ...) - without a repository on disk and without the `git` binary on the server.
 
 Use it to offer versioned content (documents, configurations, apps, snippets) to developers, CI pipelines and agents
 that know how to use git.
 
+The package is a module for [GenHTTP](https://genhttp.org/), a lightweight, embeddable web server framework for
+.NET. It provides a request handler that speaks git's smart HTTP protocol, which you can host in a GenHTTP
+application or map to a path of an existing ASP.NET Core application.
+
 ## Getting started
 
-Add the package to a project hosting a GenHTTP server:
+Create a console application and add the module along with a GenHTTP engine, which runs the server:
 
 ```sh
+dotnet new console -n GitDemo
+cd GitDemo
+
 dotnet add package GenHTTP.Modules.Git
+dotnet add package GenHTTP.Engine.Internal
+dotnet add package GenHTTP.Modules.Practices
 ```
 
 Serve a repository via `GitServer.Create()`. The `InMemoryGitRepository` behaves like a bare repository and is a good
@@ -41,6 +50,35 @@ await Host.Create()
 
 ```sh
 git clone http://localhost:8080/ hello
+```
+
+## Using ASP.NET Core
+
+With the [GenHTTP.Adapters.AspNetCore](https://www.nuget.org/packages/GenHTTP.Adapters.AspNetCore/) package, the
+handler can be mapped to a path of an existing ASP.NET Core application:
+
+```sh
+dotnet add package GenHTTP.Modules.Git
+dotnet add package GenHTTP.Adapters.AspNetCore
+```
+
+```csharp
+using GenHTTP.Adapters.AspNetCore;
+
+using GenHTTP.Modules.Git;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Kestrel accepts 30 MB request bodies by default, allow larger pushes
+builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 128 * 1024 * 1024);
+
+var app = builder.Build();
+
+// serve the repository (created as shown above) at /repo,
+// all other requests are handled by your application
+app.Map("/repo", GitServer.Create().Repository(repository));
+
+await app.RunAsync();
 ```
 
 ## Serving your own data
@@ -101,7 +139,7 @@ public async ValueTask PushAsync(GitPush push)
 - Truncated histories (e.g. deleted old versions) are served as shallow repositories
 - Pushes with deltas, push options (`git push -o`) and messages
 - Regular files, executables and symbolic links, loaded lazily
-- Single or multiple repositories per handler, all GenHTTP engines and concerns (e.g. authentication)
+- Single or multiple repositories per handler, all GenHTTP engines and concerns (e.g. authentication), ASP.NET Core
 - Protection against crafted requests (size and file limits, validated file names)
 
 Annotated tags, submodules, partial clones (`--filter`), the dumb HTTP protocol and SHA-256 repositories are not

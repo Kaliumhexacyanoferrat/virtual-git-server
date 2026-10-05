@@ -1,14 +1,25 @@
 # Getting Started
 
+The module is a .NET library that runs within a [GenHTTP](https://genhttp.org/) web server. This page creates a
+small console application hosting such a server. If you would like to add a repository to an existing ASP.NET Core
+application instead, see [ASP.NET Core](aspnet-core.md).
+
 ## Installation
 
-Add the module to a project hosting a GenHTTP server:
+You need the [.NET SDK](https://dotnet.microsoft.com/download) (10 or newer). Create a console application and add
+the module along with a GenHTTP engine, which runs the server:
 
 ```sh
+dotnet new console -n GitDemo
+cd GitDemo
+
 dotnet add package GenHTTP.Modules.Git
+dotnet add package GenHTTP.Engine.Internal
+dotnet add package GenHTTP.Modules.Practices
 ```
 
-The module targets .NET 10 and .NET 11 and works with every GenHTTP engine (internal, Kestrel and ioxide).
+The module targets .NET 10 and .NET 11 and works with every GenHTTP engine (internal, Kestrel and ioxide). The
+`Practices` package adds recommended defaults such as compression to the server.
 
 ## Serving a repository
 
@@ -39,7 +50,7 @@ await Host.Create()
           .RunAsync();
 ```
 
-Run the project and use git as you would with any other server:
+Run the project with `dotnet run` and use git as you would with any other server:
 
 ```sh
 git clone http://localhost:8080/ hello
