@@ -18,7 +18,7 @@
         <Authors>Andreas Nägeli</Authors>
         <Copyright>Copyright © Andreas Nägeli</Copyright>
 
-        <PackageProjectUrl>https://kaliumhexacyanoferrat.github.io/virtual-git-server/</PackageProjectUrl>
+        <PackageProjectUrl>https://virtual-git.genhttp.run/</PackageProjectUrl>
         <PackageLicenseExpression>MIT</PackageLicenseExpression>
         <PackageIcon>icon.png</PackageIcon>
 
