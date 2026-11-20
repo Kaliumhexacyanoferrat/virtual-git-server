@@ -45,11 +45,6 @@ project.fragment.lock.json
 *.tmp
 *~
 
-## Documentation (MkDocs)
-site/
-.venv/
-.cache/
-
 ## Agents
 CLAUDE.md
 .claude/

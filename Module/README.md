@@ -147,7 +147,7 @@ supported.
 
 ## Documentation
 
-The [documentation](https://kaliumhexacyanoferrat.github.io/virtual-git-server/) explains the concepts, how to
+The [documentation](https://virtual-git.genhttp.run/docs/) explains the concepts, how to
 implement repositories and accept pushes, and contains complete examples such as a versioned content store with
 drafts.
 

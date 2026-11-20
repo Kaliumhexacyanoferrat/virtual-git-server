@@ -7,7 +7,7 @@ API, ...) - without a repository on disk and without the `git` binary on the ser
 Use it to expose versioned content (documents, configurations, apps, snippets) to developers, CI pipelines and coding
 agents that know how to use git, instead of building custom sync tools.
 
-[![nuget Package](https://img.shields.io/nuget/v/GenHTTP.Modules.Git.svg)](https://www.nuget.org/packages/GenHTTP.Modules.Git/) [![Build](https://github.com/Kaliumhexacyanoferrat/virtual-git-server/actions/workflows/build.yml/badge.svg)](https://github.com/Kaliumhexacyanoferrat/virtual-git-server/actions/workflows/build.yml) [![View - Documentation](https://img.shields.io/badge/view-Documentation-AB54FF)](https://kaliumhexacyanoferrat.github.io/virtual-git-server/)
+[![nuget Package](https://img.shields.io/nuget/v/GenHTTP.Modules.Git.svg)](https://www.nuget.org/packages/GenHTTP.Modules.Git/) [![Build](https://github.com/Kaliumhexacyanoferrat/virtual-git-server/actions/workflows/build.yml/badge.svg)](https://github.com/Kaliumhexacyanoferrat/virtual-git-server/actions/workflows/build.yml) [![View - Documentation](https://img.shields.io/badge/view-Documentation-AB54FF)](https://virtual-git.genhttp.run/)
 
 ## How it fits in
 
@@ -119,7 +119,7 @@ git clone http://localhost:5000/repo hello
 ```
 
 The handler only answers requests below the mapped path, all other requests are passed on to the rest of your
-application. The [documentation](https://kaliumhexacyanoferrat.github.io/virtual-git-server/aspnet-core/) covers
+application. The [documentation](https://virtual-git.genhttp.run/docs/aspnet-core/) covers
 multiple repositories and authentication with ASP.NET Core.
 
 ## Serving your own data
@@ -146,7 +146,7 @@ public sealed class DocumentRepository : IWritableGitRepository
 }
 ```
 
-The [documentation](https://kaliumhexacyanoferrat.github.io/virtual-git-server/) explains the concepts, how to keep
+The [documentation](https://virtual-git.genhttp.run/docs/) explains the concepts, how to keep
 commit ids stable, how pushes are validated and shows a complete example of a versioned content store.
 
 ## Features
@@ -161,7 +161,7 @@ commit ids stable, how pushes are validated and shows a complete example of a ve
 | Hosting   | Single or multiple repositories, any GenHTTP engine or ASP.NET Core, concerns such as authentication        |
 
 Not supported: annotated tags, submodules, partial clones (`--filter`), the dumb HTTP protocol and SHA-256
-repositories. See [protocol support](https://kaliumhexacyanoferrat.github.io/virtual-git-server/protocol/) for details.
+repositories. See [protocol support](https://virtual-git.genhttp.run/docs/protocol/) for details.
 
 ## Building
 
@@ -176,12 +176,8 @@ dotnet test GenHTTP.Modules.Git.slnx
 dotnet run --project Playground
 ```
 
-The documentation is built with [MkDocs](https://www.mkdocs.org/):
-
-```sh
-pip install -r docs/requirements.txt
-mkdocs serve
-```
+The [documentation](https://virtual-git.genhttp.run/docs/) is maintained separately and hosted on
+[GenHTTP Lambda](https://genhttp.dev/).
 
 ## License
 
