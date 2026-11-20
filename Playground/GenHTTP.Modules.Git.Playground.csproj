@@ -12,8 +12,8 @@
 
     <ItemGroup>
 
-        <PackageReference Include="GenHTTP.Engine.Internal" Version="11.0.5" />
-        <PackageReference Include="GenHTTP.Modules.Practices" Version="11.0.5" />
+        <PackageReference Include="GenHTTP.Engine.Internal" Version="11.3.0" />
+        <PackageReference Include="GenHTTP.Modules.Practices" Version="11.3.0" />
 
     </ItemGroup>
 
