@@ -27,6 +27,12 @@ public interface IWritableGitRepository : IGitRepository
     /// else in the meantime, implementations should verify
     /// <see cref="GitReferenceUpdate.OldId" /> while holding a lock.
     /// </para>
+    /// <para>
+    /// The content of received files is not kept in memory but read
+    /// from the buffered push when requested via <see cref="GitFile.ReadAsync" />.
+    /// This is only possible until this method returns, so implementations
+    /// need to read (and store) the content of the files they need before.
+    /// </para>
     /// </remarks>
     /// <param name="push">The updates sent by the client</param>
     ValueTask PushAsync(GitPush push);

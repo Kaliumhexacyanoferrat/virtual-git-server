@@ -32,6 +32,10 @@ public sealed class GitServerBuilder : IHandlerBuilder<GitServerBuilder>
 
     private CompressionLevel _compression = CompressionLevel.Fastest;
 
+    private long _pushMemoryLimit = 1024 * 1024;
+
+    private string? _temporaryDirectory;
+
     private static string DefaultAgent
     {
         get
@@ -121,9 +125,10 @@ public sealed class GitServerBuilder : IHandlerBuilder<GitServerBuilder>
     /// (defaults to 128 MB).
     /// </summary>
     /// <remarks>
-    /// Pushes are processed in memory, so this limit protects the server
-    /// from running out of memory. The objects within the pushed data may
-    /// unpack to up to eight times this size.
+    /// Larger pushes are buffered in a temporary file (see <see cref="PushBuffer" />),
+    /// so this limit mostly protects the disk and bounds the time needed
+    /// to process a push. The objects within the pushed data may unpack
+    /// to up to eight times this size.
     /// </remarks>
     /// <param name="bytes">The maximum number of bytes</param>
     public GitServerBuilder MaximumPushSize(long bytes)
@@ -173,10 +178,17 @@ public sealed class GitServerBuilder : IHandlerBuilder<GitServerBuilder>
     /// processed (defaults to 64 MB).
     /// </summary>
     /// <remarks>
+    /// <para>
     /// To send a file, the server needs to read it twice: once to compute
     /// its id (unless provided, see <see cref="GitFile.Id" />) and once to
     /// send it. Files are kept in memory in between until this budget is
     /// exhausted, afterwards they are read again.
+    /// </para>
+    /// <para>
+    /// When receiving a push, files stored as a delta against another file
+    /// need the content of the other file. Such files are kept in memory
+    /// until this budget is exhausted, afterwards they are read again.
+    /// </para>
     /// </remarks>
     /// <param name="bytes">The maximum number of bytes</param>
     public GitServerBuilder ContentCache(long bytes)
@@ -198,6 +210,42 @@ public sealed class GitServerBuilder : IHandlerBuilder<GitServerBuilder>
         return this;
     }
 
+    /// <summary>
+    /// Configures how the data sent with a push is buffered while the push
+    /// is processed (by default, pushes of up to 1 MB are kept in memory and
+    /// larger ones are written to the temporary directory of the system).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A push can only be processed after it has been received completely.
+    /// To avoid keeping large pushes in memory, they are written to a temporary
+    /// file that is deleted after the push has been processed. Only commits
+    /// and directories are kept in memory, the content of files is read from
+    /// the temporary file when the repository asks for it.
+    /// </para>
+    /// <para>
+    /// If the server cannot write files, set the memory limit to the maximum
+    /// size of a push (see <see cref="MaximumPushSize" />), so pushes are always
+    /// kept in memory.
+    /// </para>
+    /// </remarks>
+    /// <param name="memoryLimit">The size up to which a push is kept in memory</param>
+    /// <param name="directory">The directory to create temporary files in (defaults to <see cref="Path.GetTempPath" />)</param>
+    public GitServerBuilder PushBuffer(long memoryLimit, string? directory = null)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(memoryLimit);
+
+        if (directory != null && !Directory.Exists(directory))
+        {
+            throw new DirectoryNotFoundException($"The directory '{directory}' does not exist");
+        }
+
+        _pushMemoryLimit = memoryLimit;
+        _temporaryDirectory = directory;
+
+        return this;
+    }
+
     public GitServerBuilder Add(IConcernBuilder concern)
     {
         _concerns.Add(concern);
@@ -211,7 +259,7 @@ public sealed class GitServerBuilder : IHandlerBuilder<GitServerBuilder>
             throw new BuilderMissingPropertyException("Repository");
         }
 
-        var options = new GitServerOptions(_agent, _maximumPushSize, _maximumFilesPerCommit, _maximumRequestSize, _contentCacheSize, _compression);
+        var options = new GitServerOptions(_agent, _maximumPushSize, _maximumFilesPerCommit, _maximumRequestSize, _contentCacheSize, _compression, _pushMemoryLimit, _temporaryDirectory);
 
         return Concerns.Chain(_concerns, new GitServerHandler(_resolver, _namedResolver, options));
     }

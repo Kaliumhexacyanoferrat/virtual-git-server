@@ -20,9 +20,10 @@ internal sealed class UpdateRejectedException(string message) : Exception(messag
 /// Trees are validated once per tree object, so a push cannot cause work
 /// beyond the number of objects it consists of (e.g. by referencing the
 /// same tree a thousand times in a thousand directories). The files of a
-/// commit are only collected when the repository asks for them.
+/// commit are only collected when the repository asks for them, and the
+/// content of received files is read from the pack when requested.
 /// </remarks>
-internal sealed class PushedObjects(RepositoryContext context, IReadOnlyDictionary<GitObjectId, ReceivedObject> received, int maximumFiles)
+internal sealed class PushedObjects(RepositoryContext context, ReceivedPack received, int maximumFiles)
 {
     /// <summary>
     /// The number of commits of the repository searched for objects the client did not send.
@@ -63,7 +64,9 @@ internal sealed class PushedObjects(RepositoryContext context, IReadOnlyDictiona
             return cached;
         }
 
-        if (!received.TryGetValue(id, out var obj) || obj.Type != GitObjectType.Commit)
+        var obj = received.Get(id);
+
+        if (obj?.Type != GitObjectType.Commit)
         {
             return null;
         }
@@ -72,7 +75,7 @@ internal sealed class PushedObjects(RepositoryContext context, IReadOnlyDictiona
 
         try
         {
-            commit = GitCommit.Parse(obj.Data);
+            commit = GitCommit.Parse(obj.Data!);
         }
         catch (FormatException e)
         {
@@ -87,7 +90,7 @@ internal sealed class PushedObjects(RepositoryContext context, IReadOnlyDictiona
     /// <summary>
     /// The type of an object sent by the client, if it was sent.
     /// </summary>
-    public GitObjectType? GetReceivedType(GitObjectId id) => received.TryGetValue(id, out var obj) ? obj.Type : null;
+    public GitObjectType? GetReceivedType(GitObjectId id) => received.Get(id)?.Type;
 
     #endregion
 
@@ -139,9 +142,10 @@ internal sealed class PushedObjects(RepositoryContext context, IReadOnlyDictiona
             {
                 Collect(entry.Id, path + "/", files);
             }
-            else if (received.TryGetValue(entry.Id, out var obj))
+            else if (received.Get(entry.Id) is { } obj)
             {
-                files.Add(new GitFile(path, obj.Data, entry.Mode.Value, entry.Id));
+                // read from the pack when requested, so a push is not kept in memory
+                files.Add(new GitFile(path, () => new ValueTask<ReadOnlyMemory<byte>>(received.Read(obj)), entry.Mode.Value, entry.Id));
             }
             else
             {
@@ -252,14 +256,14 @@ internal sealed class PushedObjects(RepositoryContext context, IReadOnlyDictiona
 
     private async ValueTask<byte[]> GetTreeDataAsync(GitObjectId id)
     {
-        if (received.TryGetValue(id, out var obj))
+        if (received.Get(id) is { } obj)
         {
             if (obj.Type != GitObjectType.Tree)
             {
                 throw new UpdateRejectedException($"object {id} is expected to be a tree");
             }
 
-            return obj.Data;
+            return obj.Data!;
         }
 
         if (await FindKnownAsync(id))
@@ -277,7 +281,7 @@ internal sealed class PushedObjects(RepositoryContext context, IReadOnlyDictiona
 
     private async ValueTask VerifyBlobAsync(GitObjectId id, string name)
     {
-        if (received.TryGetValue(id, out var obj))
+        if (received.Get(id) is { } obj)
         {
             if (obj.Type != GitObjectType.Blob)
             {

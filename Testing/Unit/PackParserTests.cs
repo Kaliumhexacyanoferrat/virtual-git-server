@@ -12,9 +12,11 @@ public sealed class PackParserTests
 {
 
     [TestMethod]
-    [DataRow(true)]
-    [DataRow(false)]
-    public async Task TestPacksWithDeltasCanBeParsed(bool offsetDeltas)
+    [DataRow(true, long.MaxValue, 64L * 1024 * 1024)]
+    [DataRow(false, long.MaxValue, 64L * 1024 * 1024)]
+    [DataRow(true, 0L, 0L)]
+    [DataRow(false, 0L, 0L)]
+    public async Task TestPacksWithDeltasCanBeParsed(bool offsetDeltas, long memoryLimit, long cacheSize)
     {
         using var git = new GitClient();
 
@@ -41,7 +43,11 @@ public sealed class PackParserTests
 
         var pack = await CreatePackAsync(git, arguments, "HEAD\n");
 
-        var objects = PackParser.Parse(pack, PackLimits.FromPushSize(100_000_000));
+        using var buffer = await BufferAsync(pack, memoryLimit);
+
+        Assert.AreEqual(memoryLimit == 0, buffer.IsFileBacked);
+
+        using var objects = PackParser.Parse(buffer, 0, PackLimits.FromPushSize(100_000_000), cacheSize);
 
         var expected = (await git.RunAsync("repo", "rev-list", "--objects", "HEAD")).Split('\n', StringSplitOptions.RemoveEmptyEntries)
                                                                                .Select(l => GitObjectId.Parse(l[..40]))
@@ -51,31 +57,40 @@ public sealed class PackParserTests
 
         foreach (var id in expected)
         {
-            Assert.IsTrue(objects.ContainsKey(id), $"Missing object {id}");
+            var obj = objects.Get(id);
+
+            Assert.IsNotNull(obj, $"Missing object {id}");
 
             var type = (await git.RunAsync("repo", "cat-file", "-t", id.ToString())).Trim();
 
-            Assert.AreEqual(type, objects[id].Type.GetName());
+            Assert.AreEqual(type, obj.Type.GetName());
+
+            // the content is reconstructed from the buffer
+            Assert.AreEqual(id, ObjectHasher.Hash(obj.Type, objects.Read(obj)));
         }
     }
 
     [TestMethod]
-    public void TestCorruptPacksAreRejected()
+    public async Task TestCorruptPacksAreRejected()
     {
         var limits = PackLimits.FromPushSize(1_000_000);
 
-        Assert.ThrowsExactly<InvalidDataException>(() => PackParser.Parse("NOPE"u8, limits));
+        Assert.ThrowsExactly<InvalidDataException>(() => Parse("NOPE"u8.ToArray(), limits));
 
         var pack = CreatePack((GitObjectType.Blob, "Hello"u8.ToArray()));
 
         var corrupt = pack.ToArray();
         corrupt[^1] ^= 1;
 
-        Assert.ThrowsExactly<InvalidDataException>(() => PackParser.Parse(corrupt, limits));
+        Assert.ThrowsExactly<InvalidDataException>(() => Parse(corrupt, limits));
 
-        var parsed = PackParser.Parse(pack, limits);
+        Assert.ThrowsExactly<InvalidDataException>(() => Parse(pack[..^5], limits));
 
-        Assert.AreEqual(GitObjectId.ForBlob("Hello"u8), parsed.Keys.Single());
+        using var buffer = await BufferAsync(pack);
+
+        using var parsed = PackParser.Parse(buffer, 0, limits, 0);
+
+        Assert.AreEqual(GitObjectId.ForBlob("Hello"u8), parsed.Ids.Single());
     }
 
     [TestMethod]
@@ -83,9 +98,113 @@ public sealed class PackParserTests
     {
         var pack = CreatePack((GitObjectType.Blob, new byte[10_000]));
 
-        Assert.ThrowsExactly<InvalidDataException>(() => PackParser.Parse(pack, new PackLimits(1_000, 1_000_000, 10, 10)));
-        Assert.ThrowsExactly<InvalidDataException>(() => PackParser.Parse(pack, new PackLimits(1_000_000, 1_000, 10, 10)));
-        Assert.ThrowsExactly<InvalidDataException>(() => PackParser.Parse(pack, new PackLimits(1_000_000, 1_000_000, 0, 10)));
+        Assert.ThrowsExactly<InvalidDataException>(() => Parse(pack, new PackLimits(1_000, 1_000_000, 10, 10)));
+        Assert.ThrowsExactly<InvalidDataException>(() => Parse(pack, new PackLimits(1_000_000, 1_000, 10, 10)));
+        Assert.ThrowsExactly<InvalidDataException>(() => Parse(pack, new PackLimits(1_000_000, 1_000_000, 0, 10)));
+    }
+
+    [TestMethod]
+    public async Task TestPackCanStartWithinBuffer()
+    {
+        var pack = CreatePack((GitObjectType.Blob, "Hello"u8.ToArray()), (GitObjectType.Blob, "World"u8.ToArray()));
+
+        using var buffer = await BufferAsync([.. "0000"u8.ToArray(), .. pack], 0);
+
+        using var parsed = PackParser.Parse(buffer, 4, PackLimits.FromPushSize(1_000_000), 0);
+
+        var world = parsed.Get(GitObjectId.ForBlob("World"u8))!;
+
+        CollectionAssert.AreEqual("World"u8.ToArray(), parsed.Read(world));
+    }
+
+    [TestMethod]
+    public async Task TestContentCannotBeReadAfterDisposal()
+    {
+        using var buffer = await BufferAsync(CreatePack((GitObjectType.Blob, "Hello"u8.ToArray())), 0);
+
+        var parsed = PackParser.Parse(buffer, 0, PackLimits.FromPushSize(1_000_000), 0);
+
+        var obj = parsed.Get(GitObjectId.ForBlob("Hello"u8))!;
+
+        parsed.Dispose();
+
+        Assert.ThrowsExactly<InvalidOperationException>(() => parsed.Read(obj));
+    }
+
+    [TestMethod]
+    public async Task TestInefficientlyCompressedObjectsCanBeParsed()
+    {
+        // a valid zlib stream that is much larger than its content, as it
+        // consists of thousands of empty blocks before the actual data
+        var content = "Hello"u8.ToArray();
+
+        var stream = new List<byte> { 0x78, 0x01 };
+
+        for (var i = 0; i < 10_000; i++)
+        {
+            stream.AddRange(new byte[] { 0x00, 0x00, 0x00, 0xFF, 0xFF });
+        }
+
+        stream.AddRange(new byte[] { 0x01, (byte)content.Length, 0x00, (byte)~content.Length, 0xFF });
+        stream.AddRange(content);
+
+        var adler = Adler32(content);
+
+        stream.AddRange(new[] { (byte)(adler >> 24), (byte)(adler >> 16), (byte)(adler >> 8), (byte)adler });
+
+        var header = new byte[16];
+
+        var length = PackWriter.WriteObjectHeader(header, GitObjectType.Blob, content.Length);
+
+        var pack = new List<byte>();
+
+        pack.AddRange("PACK"u8.ToArray());
+        pack.AddRange(new byte[] { 0, 0, 0, 2, 0, 0, 0, 2 });
+        pack.AddRange(header.Take(length));
+        pack.AddRange(stream);
+
+        // followed by another object, so the first one does not extend to the end of the pack
+        pack.AddRange(CreatePack((GitObjectType.Blob, "World"u8.ToArray()))[12..^20]);
+
+        pack.AddRange(System.Security.Cryptography.SHA1.HashData(pack.ToArray()));
+
+        using var buffer = await BufferAsync(pack.ToArray(), 0);
+
+        using var parsed = PackParser.Parse(buffer, 0, PackLimits.FromPushSize(1_000_000), 0);
+
+        CollectionAssert.AreEqual(content, parsed.Read(parsed.Get(GitObjectId.ForBlob(content))!));
+        CollectionAssert.AreEqual("World"u8.ToArray(), parsed.Read(parsed.Get(GitObjectId.ForBlob("World"u8))!));
+    }
+
+    [TestMethod]
+    public async Task TestFilesAreNotKeptInMemory()
+    {
+        var random = new Random(3);
+
+        var blobs = Enumerable.Range(0, 32).Select(_ =>
+        {
+            var data = new byte[512 * 1024];
+            random.NextBytes(data);
+            return (GitObjectType.Blob, data);
+        });
+
+        var pack = CreatePack(blobs.ToArray());
+
+        using var buffer = await BufferAsync(pack, 0);
+
+        // warm up the pools used for temporary buffers
+        PackParser.Parse(buffer, 0, PackLimits.FromPushSize(pack.Length), 0).Dispose();
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+
+        using var parsed = PackParser.Parse(buffer, 0, PackLimits.FromPushSize(pack.Length), 0);
+
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.AreEqual(32, parsed.Count);
+
+        // the pack consists of 16 MB of files
+        Assert.IsLessThan(1024 * 1024, allocated);
     }
 
     [TestMethod]
@@ -106,7 +225,9 @@ public sealed class PackParserTests
 
         var before = GC.GetAllocatedBytesForCurrentThread();
 
-        var exception = Assert.ThrowsExactly<InvalidDataException>(() => PackParser.Parse(pack.ToArray(), PackLimits.FromPushSize(1024L * 1024 * 1024)));
+        using var buffer = BufferAsync(pack.ToArray()).AsTask().GetAwaiter().GetResult();
+
+        var exception = Assert.ThrowsExactly<InvalidDataException>(() => PackParser.Parse(buffer, 0, PackLimits.FromPushSize(1024L * 1024 * 1024), 0));
 
         StringAssert.Contains(exception.Message, "exceeds the compressed data");
 
@@ -125,6 +246,29 @@ public sealed class PackParserTests
         File.WriteAllBytes(git.PathOf("pack.pack"), pack);
 
         await git.RunAsync("repo", "index-pack", "--strict", git.PathOf("pack.pack"));
+    }
+
+    private static ValueTask<SpooledBuffer> BufferAsync(byte[] data, long memoryLimit = long.MaxValue)
+        => SpooledBuffer.ReadAsync(new MemoryStream(data), long.MaxValue, memoryLimit, null);
+
+    private static void Parse(byte[] pack, PackLimits limits)
+    {
+        using var buffer = BufferAsync(pack).AsTask().GetAwaiter().GetResult();
+
+        PackParser.Parse(buffer, 0, limits, 0).Dispose();
+    }
+
+    private static uint Adler32(ReadOnlySpan<byte> data)
+    {
+        uint a = 1, b = 0;
+
+        foreach (var value in data)
+        {
+            a = (a + value) % 65521;
+            b = (b + a) % 65521;
+        }
+
+        return (b << 16) | a;
     }
 
     private static byte[] CreatePack(params (GitObjectType Type, byte[] Data)[] objects)

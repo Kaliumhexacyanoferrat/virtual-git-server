@@ -132,6 +132,10 @@ public async ValueTask PushAsync(GitPush push)
 }
 ```
 
+Pushes are not kept in memory: larger ones are buffered in a temporary file (see `PushBuffer()`), and the content of
+pushed files is read from there when you call `GitFile.ReadAsync()`. This is only possible while `PushAsync` runs, so
+store the content you need before returning.
+
 ## Features
 
 - Protocol v2 (`ls-refs`, `fetch`) and v0/v1 for fetching, v0 for pushing
