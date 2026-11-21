@@ -26,9 +26,30 @@ internal static class ReceivePack
 
     }
 
-    public static Func<Stream, ValueTask> Handle(RepositoryContext context, IWritableGitRepository repository, GitServerOptions options, ReadOnlyMemory<byte> body, ILogger logger)
+    /// <summary>
+    /// Parses the commands sent by the client and returns a function writing
+    /// the response, which processes the push.
+    /// </summary>
+    /// <remarks>
+    /// Takes ownership of the given buffer, which is disposed after the
+    /// response has been written (or if the request cannot be processed).
+    /// </remarks>
+    public static Func<Stream, ValueTask> Handle(RepositoryContext context, IWritableGitRepository repository, GitServerOptions options, SpooledBuffer body, ILogger logger)
     {
-        var reader = new PktLineReader(body);
+        try
+        {
+            return Prepare(context, repository, options, body, logger);
+        }
+        catch
+        {
+            body.Dispose();
+            throw;
+        }
+    }
+
+    private static Func<Stream, ValueTask> Prepare(RepositoryContext context, IWritableGitRepository repository, GitServerOptions options, SpooledBuffer body, ILogger logger)
+    {
+        var reader = new SpooledPktLineReader(body);
 
         var commands = new List<Command>();
 
@@ -73,6 +94,8 @@ internal static class ReceivePack
         if (commands.Count == 0)
         {
             // probing request sent before large pushes
+            body.Dispose();
+
             return _ => ValueTask.CompletedTask;
         }
 
@@ -91,7 +114,7 @@ internal static class ReceivePack
             }
         }
 
-        var pack = reader.Remaining;
+        var packOffset = reader.Position;
 
         var sideband = capabilities.Contains("side-band-64k");
         var report = capabilities.Contains("report-status");
@@ -144,7 +167,7 @@ internal static class ReceivePack
 
             try
             {
-                await ProcessAsync(context, repository, options, commands, pushOptions, pack, SendMessageAsync, logger);
+                await ProcessAsync(context, repository, options, commands, pushOptions, body, packOffset, SendMessageAsync, logger);
             }
             catch (InvalidDataException e)
             {
@@ -158,6 +181,10 @@ internal static class ReceivePack
                 {
                     command.Error ??= "internal server error";
                 }
+            }
+            finally
+            {
+                body.Dispose();
             }
 
             await messageLock.WaitAsync();
@@ -212,14 +239,16 @@ internal static class ReceivePack
     }
 
     private static async ValueTask ProcessAsync(RepositoryContext context, IWritableGitRepository repository, GitServerOptions options, List<Command> commands, List<string> pushOptions,
-                                                ReadOnlyMemory<byte> pack, Func<string, ValueTask> messenger, ILogger logger)
+                                                SpooledBuffer body, long packOffset, Func<string, ValueTask> messenger, ILogger logger)
     {
-        var received = pack.IsEmpty ? new Dictionary<GitObjectId, ReceivedObject>() : PackParser.Parse(pack.Span, PackLimits.FromPushSize(options.MaximumPushSize));
+        var hasPack = packOffset < body.Length;
 
-        if (pack.IsEmpty && commands.Any(c => !c.NewId.IsZero))
+        if (!hasPack && commands.Any(c => !c.NewId.IsZero))
         {
             throw new InvalidDataException("missing pack");
         }
+
+        using var received = hasPack ? PackParser.Parse(body, packOffset, PackLimits.FromPushSize(options.MaximumPushSize), options.ContentCacheSize) : ReceivedPack.Empty;
 
         var objects = new PushedObjects(context, received, options.MaximumFilesPerCommit);
 

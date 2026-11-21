@@ -5,6 +5,7 @@ using GenHTTP.Api.Infrastructure;
 using GenHTTP.Api.Protocol;
 
 using GenHTTP.Modules.Git.Objects;
+using GenHTTP.Modules.Git.Packs;
 using GenHTTP.Modules.Git.Protocol;
 
 using Microsoft.Extensions.Logging;
@@ -249,7 +250,7 @@ public sealed class GitServerHandler : IHandler
             return Text(request, ResponseStatus.Forbidden, "This repository does not accept pushes.");
         }
 
-        var body = await ReadBodyAsync(request, Options.MaximumPushSize);
+        var body = await SpoolBodyAsync(request, Options);
 
         return await RespondAsync(request, GitContentTypes.ReceivePackResult, logger, () => new(ReceivePack.Handle(context, writable, Options, body, logger)));
     }
@@ -339,6 +340,50 @@ public sealed class GitServerHandler : IHandler
         }
 
         return raw;
+    }
+
+    /// <summary>
+    /// Reads the complete body of a push into a buffer, which is kept in
+    /// memory for small pushes and written to a temporary file otherwise.
+    /// </summary>
+    private static async ValueTask<SpooledBuffer> SpoolBodyAsync(IRequest request, GitServerOptions options)
+    {
+        var body = request.GetBody();
+
+        if (body == null)
+        {
+            return await SpoolAsync(Stream.Null, options);
+        }
+
+        await using var stream = body.AsStream();
+
+        var raw = await SpoolAsync(stream, options);
+
+        Span<byte> magic = stackalloc byte[2];
+
+        if (raw.Read(0, magic) == 2 && magic[0] == 0x1F && magic[1] == 0x8B)
+        {
+            using (raw)
+            {
+                await using var decompressed = new GZipStream(raw.OpenRead(), CompressionMode.Decompress);
+
+                return await SpoolAsync(decompressed, options);
+            }
+        }
+
+        return raw;
+    }
+
+    private static async ValueTask<SpooledBuffer> SpoolAsync(Stream stream, GitServerOptions options)
+    {
+        try
+        {
+            return await SpooledBuffer.ReadAsync(stream, options.MaximumPushSize, options.PushMemoryLimit, options.TemporaryDirectory);
+        }
+        catch (BufferLimitExceededException e)
+        {
+            throw new ProviderException(ResponseStatus.RequestEntityTooLarge, e.Message);
+        }
     }
 
     private static async ValueTask<ReadOnlyMemory<byte>> ReadLimitedAsync(Stream stream, long limit)

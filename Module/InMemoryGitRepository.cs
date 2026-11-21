@@ -199,8 +199,29 @@ public sealed class InMemoryGitRepository : IWritableGitRepository
 
     public ValueTask<GitTree> GetTreeAsync(GitCommit commit) => new(GetRevision(commit.Id)?.Tree ?? throw new InvalidOperationException($"Unknown commit {commit.Id}"));
 
-    public ValueTask PushAsync(GitPush push)
+    public async ValueTask PushAsync(GitPush push)
     {
+        // the content of pushed files can only be read while the push is
+        // processed, so it is copied to memory before storing the revisions
+        var revisions = new Dictionary<GitReferenceUpdate, List<GitRevision>>();
+
+        var contents = new Dictionary<GitObjectId, ReadOnlyMemory<byte>>();
+
+        foreach (var update in push.Updates)
+        {
+            if (!update.IsDelete && (!DenyNonFastForwards || update.IsFastForward))
+            {
+                var materialized = new List<GitRevision>(update.Revisions.Count);
+
+                foreach (var revision in update.Revisions)
+                {
+                    materialized.Add(await MaterializeAsync(revision, contents));
+                }
+
+                revisions.Add(update, materialized);
+            }
+        }
+
         lock (_lock)
         {
             foreach (var update in push.Updates)
@@ -229,7 +250,7 @@ public sealed class InMemoryGitRepository : IWritableGitRepository
                 }
                 else
                 {
-                    foreach (var revision in update.Revisions)
+                    foreach (var revision in revisions[update])
                     {
                         _commits[revision.Commit.Id] = revision;
                     }
@@ -241,7 +262,32 @@ public sealed class InMemoryGitRepository : IWritableGitRepository
             }
         }
 
-        return ValueTask.CompletedTask;
+    }
+
+    private static async ValueTask<GitRevision> MaterializeAsync(GitRevision revision, Dictionary<GitObjectId, ReadOnlyMemory<byte>> contents)
+    {
+        var files = new List<GitFile>(revision.Tree.Count);
+
+        foreach (var file in revision.Tree)
+        {
+            if (file.IsLoaded || file.Id == null)
+            {
+                files.Add(file);
+                continue;
+            }
+
+            var id = file.Id.Value;
+
+            if (!contents.TryGetValue(id, out var content))
+            {
+                content = await file.ReadAsync();
+                contents.Add(id, content);
+            }
+
+            files.Add(new GitFile(file.Path, content, file.Mode, id));
+        }
+
+        return new GitRevision(revision.Commit, new GitTree(files));
     }
 
     #endregion

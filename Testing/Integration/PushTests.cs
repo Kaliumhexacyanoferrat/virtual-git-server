@@ -1,3 +1,8 @@
+using System.IO.Compression;
+
+using GenHTTP.Modules.Git.Objects;
+using GenHTTP.Modules.Git.Packs;
+using GenHTTP.Modules.Git.Protocol;
 using GenHTTP.Modules.Git.Tests.Fixtures;
 using GenHTTP.Modules.Git.Tests.Infrastructure;
 using GenHTTP.Testing;
@@ -102,12 +107,21 @@ public sealed class PushTests
     {
         var updates = new List<GitReferenceUpdate>();
 
+        var contents = new Dictionary<string, string>();
+
         var inner = await Repositories.WithHistoryAsync(1);
 
-        var repository = new InterceptingRepository(inner, push =>
+        var repository = new InterceptingRepository(inner, async push =>
         {
             updates.AddRange(push.Updates);
-            return new(true);
+
+            // the content of pushed files can only be read while the push is processed
+            foreach (var file in push.Updates.Single().Revisions[^1].Tree)
+            {
+                contents[file.Path] = await file.ReadStringAsync();
+            }
+
+            return true;
         });
 
         await using var host = await TestHost.RunAsync(GitServer.Create().Repository(repository));
@@ -142,10 +156,8 @@ public sealed class PushTests
         Assert.AreEqual("Test User", update.Revisions[1].Commit.Author.Name);
 
         // files the client did not need to send are taken from the repository
-        var files = update.Revisions[1].Tree;
-
-        Assert.AreEqual("# Version 1\n", await files.GetFile("README.md")!.ReadStringAsync());
-        Assert.AreEqual("b", await files.GetFile("b.txt")!.ReadStringAsync());
+        Assert.AreEqual("# Version 1\n", contents["README.md"]);
+        Assert.AreEqual("b", contents["b.txt"]);
 
         Assert.AreEqual(update.NewId, update.Commit!.Id);
     }
@@ -213,11 +225,14 @@ public sealed class PushTests
     }
 
     [TestMethod]
-    public async Task TestLargePush()
+    [DataRow(0L)]
+    [DataRow(1024L * 1024)]
+    [DataRow(long.MaxValue)]
+    public async Task TestLargePush(long memoryLimit)
     {
         var repository = await Repositories.WithHistoryAsync(1);
 
-        await using var host = await TestHost.RunAsync(GitServer.Create().Repository(repository));
+        await using var host = await TestHost.RunAsync(GitServer.Create().Repository(repository).PushBuffer(memoryLimit));
 
         using var git = new GitClient();
 
@@ -236,6 +251,123 @@ public sealed class PushTests
         await git.RunAsync(null, "clone", host.GetUrl("/"), "verify");
 
         CollectionAssert.AreEqual(data, File.ReadAllBytes(Path.Combine(git.PathOf("verify"), "large.bin")));
+    }
+
+    [TestMethod]
+    public async Task TestTemporaryFilesAreRemoved()
+    {
+        var directory = Directory.CreateTempSubdirectory("genhttp-git-tests-");
+
+        try
+        {
+            var during = new List<string>();
+
+            var inner = await Repositories.WithHistoryAsync(1);
+
+            var repository = new InterceptingRepository(inner, push =>
+            {
+                during.AddRange(Directory.GetFiles(directory.FullName));
+                return new(true);
+            });
+
+            await using var host = await TestHost.RunAsync(GitServer.Create().Repository(repository).PushBuffer(0, directory.FullName));
+
+            using var git = new GitClient();
+
+            await git.RunAsync(null, "clone", host.GetUrl("/"), "clone");
+
+            git.Write("clone", "a.txt", "a");
+            await git.CommitAllAsync("clone", "First");
+
+            await git.RunAsync("clone", "push", "-q", "origin", "main");
+
+            Assert.HasCount(1, during);
+
+            Assert.IsEmpty(Directory.GetFiles(directory.FullName));
+        }
+        finally
+        {
+            directory.Delete(true);
+        }
+    }
+
+    [TestMethod]
+    public async Task TestPushedContentIsOnlyAvailableDuringPush()
+    {
+        GitReferenceUpdate? update = null;
+
+        var inner = await Repositories.WithHistoryAsync(1);
+
+        var repository = new InterceptingRepository(inner, push =>
+        {
+            update = push.Updates.Single();
+            return new(true);
+        });
+
+        await using var host = await TestHost.RunAsync(GitServer.Create().Repository(repository));
+
+        using var git = new GitClient();
+
+        await git.RunAsync(null, "clone", host.GetUrl("/"), "clone");
+
+        git.Write("clone", "a.txt", "a");
+        await git.CommitAllAsync("clone", "First");
+
+        await git.RunAsync("clone", "push", "-q", "origin", "main");
+
+        var file = update!.Revisions.Single().Tree.GetFile("a.txt")!;
+
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await file.ReadAsync());
+
+        // the in-memory repository copied the content while the push was processed
+        var stored = inner.GetRevision(update.NewId)!.Tree.GetFile("a.txt")!;
+
+        Assert.AreEqual("a", await stored.ReadStringAsync());
+    }
+
+    [TestMethod]
+    [DataRow(0L)]
+    [DataRow(long.MaxValue)]
+    public async Task TestCompressedPush(long memoryLimit)
+    {
+        var repository = await Repositories.WithHistoryAsync(1);
+
+        await using var host = await TestHost.RunAsync(GitServer.Create().Repository(repository).PushBuffer(memoryLimit));
+
+        var main = repository.References["refs/heads/main"];
+
+        var parent = repository.GetRevision(main)!.Commit;
+
+        var commit = GitCommit.Create()
+                              .Tree(parent.Tree)
+                              .Parent(parent)
+                              .Author("Test User", "test@example.com", DateTimeOffset.UnixEpoch)
+                              .Message("Compressed")
+                              .Build();
+
+        using var pack = new MemoryStream();
+
+        await PackWriter.WriteAsync(pack, [new PackEntry(GitObjectType.Commit, commit.Data)], CompressionLevel.Optimal);
+
+        var commands = new PktLineWriter().Line($"{main} {commit.Id} refs/heads/main\0report-status").Flush().ToArray();
+
+        using var body = new MemoryStream();
+
+        await using (var gzip = new GZipStream(body, CompressionLevel.Optimal, true))
+        {
+            gzip.Write(commands);
+            gzip.Write(pack.ToArray());
+        }
+
+        var request = host.GetRequest("/git-receive-pack", HttpMethod.Post);
+
+        request.Content = new ByteArrayContent(body.ToArray());
+
+        using var response = await host.GetResponseAsync(request);
+
+        StringAssert.Contains(await response.Content.ReadAsStringAsync(), "ok refs/heads/main");
+
+        Assert.AreEqual(commit.Id, repository.References["refs/heads/main"]);
     }
 
     [TestMethod]

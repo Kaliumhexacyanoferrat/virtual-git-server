@@ -6,13 +6,8 @@ using GenHTTP.Modules.Git.Objects;
 namespace GenHTTP.Modules.Git.Packs;
 
 /// <summary>
-/// An object received with a pack.
-/// </summary>
-internal sealed record ReceivedObject(GitObjectId Id, GitObjectType Type, byte[] Data);
-
-/// <summary>
 /// Restrictions applied while parsing a pack, protecting the
-/// server against packs that would exhaust its memory.
+/// server against packs that would exhaust its resources.
 /// </summary>
 internal sealed record PackLimits(long MaximumObjectSize, long MaximumTotalSize, int MaximumObjects, int MaximumDeltaDepth)
 {
@@ -31,253 +26,333 @@ internal sealed record PackLimits(long MaximumObjectSize, long MaximumTotalSize,
 /// Parses pack files sent by clients, resolving deltas.
 /// </summary>
 /// <remarks>
+/// <para>
+/// The pack is read from a <see cref="SpooledBuffer" /> and is not kept
+/// in memory as a whole. Parsing determines the location, type and id of
+/// every object, keeping only commits and trees in memory. The content of
+/// all other objects is read from the buffer again when requested (see
+/// <see cref="ReceivedPack.Read" />).
+/// </para>
+/// <para>
 /// Packs need to be self-contained: deltas against objects not contained
 /// in the pack ("thin packs") are rejected, which is why the server
 /// advertises the <c>no-thin</c> capability.
+/// </para>
 /// </remarks>
 internal static class PackParser
 {
-    private const int TypeOffsetDelta = 6;
-
-    private const int TypeReferenceDelta = 7;
-
-    private sealed class Entry
-    {
-
-        public long Offset { get; init; }
-
-        public int Kind { get; init; }
-
-        public byte[]? Data { get; set; }
-
-        public long BaseOffset { get; init; }
-
-        public GitObjectId BaseId { get; init; }
-
-        public GitObjectType Type { get; set; }
-
-        public GitObjectId Id { get; set; }
-
-        public int Depth { get; set; }
-
-        public bool Resolved { get; set; }
-
-    }
+    private const int HeaderSize = 12;
 
     /// <summary>
-    /// Parses the given pack.
+    /// The number of bytes needed to parse the header of any object.
     /// </summary>
+    private const int MaximumObjectHeaderSize = 64;
+
+    /// <summary>
+    /// Parses the pack stored in the given buffer.
+    /// </summary>
+    /// <param name="buffer">The buffer holding the pack</param>
+    /// <param name="offset">The position of the pack within the buffer, which extends to the end of the buffer</param>
+    /// <param name="limits">The limits to be enforced</param>
+    /// <param name="cacheSize">The number of bytes of delta bases to be kept in memory</param>
     /// <returns>The objects of the pack, by id</returns>
     /// <exception cref="InvalidDataException">Thrown if the pack is malformed or exceeds the given limits</exception>
-    public static Dictionary<GitObjectId, ReceivedObject> Parse(ReadOnlySpan<byte> pack, PackLimits limits)
+    public static ReceivedPack Parse(SpooledBuffer buffer, long offset, PackLimits limits, long cacheSize)
     {
-        if (pack.Length < 32 || !pack[..4].SequenceEqual("PACK"u8))
+        var end = buffer.Length - GitObjectId.Size;
+
+        if (end - offset < HeaderSize)
         {
             throw new InvalidDataException("Invalid pack: missing header");
         }
 
-        var version = BinaryPrimitives.ReadUInt32BigEndian(pack[4..]);
+        using var reader = new SequentialReader(buffer, offset, end);
+
+        reader.Ensure(HeaderSize);
+
+        var header = reader.Available;
+
+        if (!header[..4].SequenceEqual("PACK"u8))
+        {
+            throw new InvalidDataException("Invalid pack: missing header");
+        }
+
+        var version = BinaryPrimitives.ReadUInt32BigEndian(header[4..]);
 
         if (version is not (2 or 3))
         {
             throw new InvalidDataException($"Invalid pack: unsupported version {version}");
         }
 
-        var count = BinaryPrimitives.ReadUInt32BigEndian(pack[8..]);
+        var count = BinaryPrimitives.ReadUInt32BigEndian(header[8..]);
 
         if (count > limits.MaximumObjects)
         {
             throw new InvalidDataException($"Pack exceeds the maximum number of {limits.MaximumObjects} objects");
         }
 
-        var end = pack.Length - GitObjectId.Size;
+        reader.Advance(HeaderSize);
 
-        var entries = new List<Entry>((int)count);
+        var entries = new List<ReceivedObject>((int)count);
 
-        var position = 12;
+        var byOffset = new Dictionary<long, ReceivedObject>((int)count);
 
         long total = 0;
 
+        using var scratch = new ScratchBuffer();
+
         for (var i = 0; i < count; i++)
         {
-            var offset = position;
+            var entry = ReadObject(reader, scratch, offset, limits, ref total);
 
-            if (position >= end)
-            {
-                throw new InvalidDataException("Invalid pack: unexpected end of data");
-            }
-
-            var current = pack[position++];
-
-            var kind = (current >> 4) & 7;
-
-            long size = current & 0x0F;
-
-            var shift = 4;
-
-            while ((current & 0x80) != 0)
-            {
-                if (position >= end || shift > 56)
-                {
-                    throw new InvalidDataException("Invalid pack: malformed object header");
-                }
-
-                current = pack[position++];
-
-                size |= (long)(current & 0x7F) << shift;
-                shift += 7;
-            }
-
-            long baseOffset = 0;
-
-            var baseId = GitObjectId.Zero;
-
-            switch (kind)
-            {
-                case (int)GitObjectType.Commit or (int)GitObjectType.Tree or (int)GitObjectType.Blob or (int)GitObjectType.Tag:
-                    break;
-
-                case TypeOffsetDelta:
-                    {
-                        if (position >= end)
-                        {
-                            throw new InvalidDataException("Invalid pack: unexpected end of data");
-                        }
-
-                        current = pack[position++];
-
-                        long distance = current & 0x7F;
-
-                        while ((current & 0x80) != 0)
-                        {
-                            if (position >= end || distance > (long.MaxValue >> 8))
-                            {
-                                throw new InvalidDataException("Invalid pack: malformed delta offset");
-                            }
-
-                            current = pack[position++];
-                            distance = ((distance + 1) << 7) | (long)(current & 0x7F);
-                        }
-
-                        baseOffset = offset - distance;
-
-                        if (distance <= 0 || baseOffset < 12)
-                        {
-                            throw new InvalidDataException("Invalid pack: delta base offset out of range");
-                        }
-
-                        break;
-                    }
-
-                case TypeReferenceDelta:
-                    {
-                        if (position + GitObjectId.Size > end)
-                        {
-                            throw new InvalidDataException("Invalid pack: unexpected end of data");
-                        }
-
-                        baseId = GitObjectId.FromBytes(pack.Slice(position, GitObjectId.Size));
-                        position += GitObjectId.Size;
-                        break;
-                    }
-
-                default:
-                    throw new InvalidDataException($"Invalid pack: unknown object type {kind}");
-            }
-
-            if (size > limits.MaximumObjectSize)
-            {
-                throw new InvalidDataException("Pack contains an object exceeding the allowed size");
-            }
-
-            // deflate compresses by a factor of 1032 at most, so a size beyond
-            // that cannot be valid and must not be allocated
-            if (size > (long)(end - position) * 1032 + 64)
-            {
-                throw new InvalidDataException("Invalid pack: object size exceeds the compressed data");
-            }
-
-            total += size;
-
-            if (total > limits.MaximumTotalSize)
-            {
-                throw new InvalidDataException("Pack exceeds the allowed size when unpacked");
-            }
-
-            var data = new byte[size];
-
-            position += Zlib.Inflate(pack[position..end], data);
-
-            entries.Add(new Entry
-            {
-                Offset = offset,
-                Kind = kind,
-                Data = data,
-                BaseOffset = baseOffset,
-                BaseId = baseId
-            });
+            entries.Add(entry);
+            byOffset.Add(entry.Offset, entry);
         }
 
-        if (position != end)
+        if (reader.Remaining != 0)
         {
             throw new InvalidDataException("Invalid pack: unexpected data after the last object");
         }
 
         Span<byte> checksum = stackalloc byte[GitObjectId.Size];
 
-        SHA1.HashData(pack[..end], checksum);
-
-        if (!checksum.SequenceEqual(pack[end..]))
+        if (buffer.Read(end, checksum) != GitObjectId.Size || !checksum.SequenceEqual(reader.GetHash()))
         {
             throw new InvalidDataException("Invalid pack: checksum mismatch");
         }
 
-        return Resolve(entries, limits);
+        var pack = new ReceivedPack(buffer, limits.MaximumObjectSize, cacheSize);
+
+        Resolve(pack, entries, byOffset, limits, total);
+
+        return pack;
     }
 
-    private static Dictionary<GitObjectId, ReceivedObject> Resolve(List<Entry> entries, PackLimits limits)
+    private static ReceivedObject ReadObject(SequentialReader reader, ScratchBuffer scratch, long packOffset, PackLimits limits, ref long total)
     {
-        var result = new Dictionary<GitObjectId, ReceivedObject>(entries.Count);
+        var offset = reader.Position - packOffset;
 
-        var byOffset = new Dictionary<long, List<Entry>>();
-        var byId = new Dictionary<GitObjectId, List<Entry>>();
-
-        var queue = new Queue<Entry>();
-
-        foreach (var entry in entries)
+        if (reader.Remaining <= 0)
         {
-            if (entry.Kind == TypeOffsetDelta)
-            {
-                Register(byOffset, entry.BaseOffset, entry);
-            }
-            else if (entry.Kind == TypeReferenceDelta)
-            {
-                Register(byId, entry.BaseId, entry);
-            }
-            else
-            {
-                entry.Type = (GitObjectType)entry.Kind;
-                entry.Id = ObjectHasher.Hash(entry.Type, entry.Data);
-                entry.Resolved = true;
+            throw new InvalidDataException("Invalid pack: unexpected end of data");
+        }
 
-                queue.Enqueue(entry);
+        reader.Ensure(MaximumObjectHeaderSize);
+
+        var header = reader.Available;
+
+        var position = 0;
+
+        var current = header[position++];
+
+        var kind = (current >> 4) & 7;
+
+        long size = current & 0x0F;
+
+        var shift = 4;
+
+        while ((current & 0x80) != 0)
+        {
+            if (position >= header.Length || shift > 56)
+            {
+                throw new InvalidDataException("Invalid pack: malformed object header");
+            }
+
+            current = header[position++];
+
+            size |= (long)(current & 0x7F) << shift;
+            shift += 7;
+        }
+
+        long baseOffset = 0;
+
+        var baseId = GitObjectId.Zero;
+
+        switch (kind)
+        {
+            case (int)GitObjectType.Commit or (int)GitObjectType.Tree or (int)GitObjectType.Blob or (int)GitObjectType.Tag:
+                break;
+
+            case ReceivedObject.OffsetDelta:
+                {
+                    if (position >= header.Length)
+                    {
+                        throw new InvalidDataException("Invalid pack: unexpected end of data");
+                    }
+
+                    current = header[position++];
+
+                    long distance = current & 0x7F;
+
+                    while ((current & 0x80) != 0)
+                    {
+                        if (position >= header.Length || distance > (long.MaxValue >> 8))
+                        {
+                            throw new InvalidDataException("Invalid pack: malformed delta offset");
+                        }
+
+                        current = header[position++];
+                        distance = ((distance + 1) << 7) | (long)(current & 0x7F);
+                    }
+
+                    baseOffset = offset - distance;
+
+                    if (distance <= 0 || baseOffset < HeaderSize)
+                    {
+                        throw new InvalidDataException("Invalid pack: delta base offset out of range");
+                    }
+
+                    break;
+                }
+
+            case ReceivedObject.ReferenceDelta:
+                {
+                    if (position + GitObjectId.Size > header.Length)
+                    {
+                        throw new InvalidDataException("Invalid pack: unexpected end of data");
+                    }
+
+                    baseId = GitObjectId.FromBytes(header.Slice(position, GitObjectId.Size));
+                    position += GitObjectId.Size;
+                    break;
+                }
+
+            default:
+                throw new InvalidDataException($"Invalid pack: unknown object type {kind}");
+        }
+
+        reader.Advance(position);
+
+        if (size > limits.MaximumObjectSize)
+        {
+            throw new InvalidDataException("Pack contains an object exceeding the allowed size");
+        }
+
+        // deflate compresses by a factor of 1032 at most, so a size beyond
+        // that cannot be valid and must not be allocated
+        if (size > reader.Remaining * 1032 + 64)
+        {
+            throw new InvalidDataException("Invalid pack: object size exceeds the compressed data");
+        }
+
+        total += size;
+
+        if (total > limits.MaximumTotalSize)
+        {
+            throw new InvalidDataException("Pack exceeds the allowed size when unpacked");
+        }
+
+        var entry = new ReceivedObject(offset, reader.Position, kind, size, baseOffset, baseId);
+
+        // commits and trees are needed to validate the push, so they are kept,
+        // while everything else is read again when needed
+        var retain = kind is (int)GitObjectType.Commit or (int)GitObjectType.Tree;
+
+        var data = retain ? new byte[size] : scratch.Get(size);
+
+        var content = data.AsSpan(0, (int)size);
+
+        entry.CompressedLength = reader.Inflate(content);
+
+        if (!entry.IsDelta)
+        {
+            entry.Type = (GitObjectType)kind;
+            entry.Id = ObjectHasher.Hash(entry.Type, content);
+            entry.Resolved = true;
+
+            if (retain)
+            {
+                entry.Data = data;
             }
         }
 
-        long total = entries.Sum(e => (long)e.Data!.Length);
+        reader.Advance(entry.CompressedLength);
 
-        while (queue.TryDequeue(out var resolved))
+        return entry;
+    }
+
+    private static void Resolve(ReceivedPack pack, List<ReceivedObject> entries, Dictionary<long, ReceivedObject> byOffset, PackLimits limits, long total)
+    {
+        var byBase = new Dictionary<ReceivedObject, List<ReceivedObject>>();
+        var byId = new Dictionary<GitObjectId, List<ReceivedObject>>();
+
+        foreach (var entry in entries)
         {
-            result.TryAdd(resolved.Id, new ReceivedObject(resolved.Id, resolved.Type, resolved.Data!));
-
-            if (byOffset.Remove(resolved.Offset, out var offsetDependents))
+            if (entry.Kind == ReceivedObject.OffsetDelta)
             {
-                ResolveDependents(resolved, offsetDependents, queue, limits, ref total);
+                if (byOffset.TryGetValue(entry.BaseOffset, out var baseEntry))
+                {
+                    baseEntry.IsBase = true;
+                    Register(byBase, baseEntry, entry);
+                }
+            }
+            else if (entry.Kind == ReceivedObject.ReferenceDelta)
+            {
+                Register(byId, entry.BaseId, entry);
+            }
+        }
+
+        // objects are processed depth-first, so the base of a delta has been
+        // processed recently and is likely to still be cached
+        var pending = new Stack<ReceivedObject>();
+
+        for (var i = entries.Count - 1; i >= 0; i--)
+        {
+            if (entries[i].Resolved)
+            {
+                pending.Push(entries[i]);
+            }
+        }
+
+        while (pending.TryPop(out var current))
+        {
+            if (!current.Resolved)
+            {
+                var baseEntry = current.Base!;
+
+                if (baseEntry.Depth + 1 > limits.MaximumDeltaDepth)
+                {
+                    throw new InvalidDataException("Invalid pack: delta chain too long");
+                }
+
+                var data = pack.Load(current);
+
+                total += data.Length;
+
+                if (total > limits.MaximumTotalSize)
+                {
+                    throw new InvalidDataException("Pack exceeds the allowed size when unpacked");
+                }
+
+                current.Type = baseEntry.Type;
+                current.Id = ObjectHasher.Hash(current.Type, data);
+                current.Depth = baseEntry.Depth + 1;
+                current.Resolved = true;
+
+                if (current.Type is GitObjectType.Commit or GitObjectType.Tree)
+                {
+                    current.Data = data;
+                }
+
+                if (!current.IsBase && byId.ContainsKey(current.Id))
+                {
+                    // only known now that the id has been computed
+                    current.IsBase = true;
+                    pack.Remember(current, data);
+                }
             }
 
-            if (byId.Remove(resolved.Id, out var idDependents))
+            pack.Add(current);
+
+            if (byBase.Remove(current, out var offsetDependents))
             {
-                ResolveDependents(resolved, idDependents, queue, limits, ref total);
+                Schedule(current, offsetDependents, pending);
+            }
+
+            if (byId.Remove(current.Id, out var idDependents))
+            {
+                current.IsBase = true;
+                Schedule(current, idDependents, pending);
             }
         }
 
@@ -285,44 +360,23 @@ internal static class PackParser
         {
             throw new InvalidDataException("Invalid pack: unable to resolve delta base (thin packs are not supported)");
         }
-
-        return result;
     }
 
-    private static void ResolveDependents(Entry baseEntry, List<Entry> dependents, Queue<Entry> queue, PackLimits limits, ref long total)
+    private static void Schedule(ReceivedObject baseEntry, List<ReceivedObject> dependents, Stack<ReceivedObject> pending)
     {
-        foreach (var dependent in dependents)
+        for (var i = dependents.Count - 1; i >= 0; i--)
         {
-            if (dependent.Resolved)
+            var dependent = dependents[i];
+
+            if (!dependent.Resolved && dependent.Base == null)
             {
-                continue;
+                dependent.Base = baseEntry;
+                pending.Push(dependent);
             }
-
-            if (baseEntry.Depth + 1 > limits.MaximumDeltaDepth)
-            {
-                throw new InvalidDataException("Invalid pack: delta chain too long");
-            }
-
-            var data = DeltaApplier.Apply(baseEntry.Data, dependent.Data, limits.MaximumObjectSize);
-
-            total += data.Length;
-
-            if (total > limits.MaximumTotalSize)
-            {
-                throw new InvalidDataException("Pack exceeds the allowed size when unpacked");
-            }
-
-            dependent.Data = data;
-            dependent.Type = baseEntry.Type;
-            dependent.Id = ObjectHasher.Hash(dependent.Type, data);
-            dependent.Depth = baseEntry.Depth + 1;
-            dependent.Resolved = true;
-
-            queue.Enqueue(dependent);
         }
     }
 
-    private static void Register<T>(Dictionary<T, List<Entry>> index, T key, Entry entry) where T : notnull
+    private static void Register<T>(Dictionary<T, List<ReceivedObject>> index, T key, ReceivedObject entry) where T : notnull
     {
         if (!index.TryGetValue(key, out var list))
         {
@@ -332,5 +386,137 @@ internal static class PackParser
 
         list.Add(entry);
     }
+
+    #region Reading
+
+    /// <summary>
+    /// Reads a pack sequentially through a window kept in memory,
+    /// computing the checksum of the data read.
+    /// </summary>
+    private sealed class SequentialReader(SpooledBuffer buffer, long position, long end) : IDisposable
+    {
+        private const int InitialSize = 64 * 1024;
+
+        private readonly IncrementalHash _hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA1);
+
+        private byte[] _window = PackBuffers.Rent(InitialSize);
+
+        private int _start;
+
+        private int _count;
+
+        /// <summary>
+        /// The position of the next byte to be read within the buffer.
+        /// </summary>
+        public long Position { get; private set; } = position;
+
+        /// <summary>
+        /// The number of bytes left to be read.
+        /// </summary>
+        public long Remaining => end - Position;
+
+        /// <summary>
+        /// The bytes read into the window, starting at the current position.
+        /// </summary>
+        public ReadOnlySpan<byte> Available => _window.AsSpan(_start, _count);
+
+        /// <summary>
+        /// Makes sure that the given number of bytes is available, unless
+        /// the end of the data is reached before.
+        /// </summary>
+        public void Ensure(long count)
+        {
+            var needed = (int)Math.Min(Math.Min(count, Remaining), Array.MaxLength);
+
+            if (_count >= needed)
+            {
+                return;
+            }
+
+            if (needed > _window.Length)
+            {
+                var larger = PackBuffers.Rent(Math.Min(Math.Max(needed, _window.Length * 2L), Array.MaxLength));
+
+                Available.CopyTo(larger);
+
+                PackBuffers.Return(_window);
+
+                _window = larger;
+                _start = 0;
+            }
+            else if (_start + needed > _window.Length)
+            {
+                Available.CopyTo(_window);
+                _start = 0;
+            }
+
+            // read as much as fits into the window to reduce the number of reads
+            var target = (int)Math.Min(_window.Length - _start, Remaining);
+
+            while (_count < target)
+            {
+                var read = buffer.Read(Position + _count, _window.AsSpan(_start + _count, target - _count));
+
+                if (read == 0)
+                {
+                    throw new InvalidDataException("Invalid pack: unexpected end of data");
+                }
+
+                _count += read;
+            }
+        }
+
+        public void Advance(int count)
+        {
+            _hash.AppendData(_window, _start, count);
+
+            _start += count;
+            _count -= count;
+
+            Position += count;
+        }
+
+        /// <summary>
+        /// Decompresses the zlib stream at the current position without advancing.
+        /// </summary>
+        /// <returns>The length of the zlib stream</returns>
+        public int Inflate(Span<byte> destination)
+        {
+            // the compressed size is not stored in the pack, so the window needs to
+            // be large enough for the stream - which may exceed the decompressed size
+            // a little for incompressible data
+            long window = destination.Length + (destination.Length >> 10) + 1024;
+
+            while (true)
+            {
+                Ensure(window);
+
+                var available = Available;
+
+                try
+                {
+                    return Zlib.Inflate(available, destination);
+                }
+                catch (InvalidDataException) when (available.Length < Remaining && available.Length < Array.MaxLength)
+                {
+                    // the stream might be longer than expected, so try again with more data
+                    window = Math.Max(window, available.Length) * 2;
+                }
+            }
+        }
+
+        public byte[] GetHash() => _hash.GetHashAndReset();
+
+        public void Dispose()
+        {
+            _hash.Dispose();
+
+            PackBuffers.Return(_window);
+            _window = [];
+        }
+
+    }
+
+    #endregion
 
 }

@@ -1,5 +1,7 @@
 using System.Text;
 
+using GenHTTP.Modules.Git.Packs;
+
 namespace GenHTTP.Modules.Git.Protocol;
 
 internal enum PktLineKind
@@ -65,33 +67,13 @@ internal sealed class PktLineReader(ReadOnlyMemory<byte> buffer)
             throw new ProtocolException("Malformed pkt-line: truncated length");
         }
 
-        var length = 0;
-
-        foreach (var c in buffer.Span.Slice(_position, 4))
-        {
-            var digit = c switch
-            {
-                >= (byte)'0' and <= (byte)'9' => c - '0',
-                >= (byte)'a' and <= (byte)'f' => c - 'a' + 10,
-                >= (byte)'A' and <= (byte)'F' => c - 'A' + 10,
-                _ => throw new ProtocolException("Malformed pkt-line: invalid length")
-            };
-
-            length = (length << 4) | digit;
-        }
+        var length = ParseLength(buffer.Span.Slice(_position, 4));
 
         _position += 4;
 
-        switch (length)
+        if (TryGetControl(length, out var control))
         {
-            case 0:
-                return new PktLine(PktLineKind.Flush, default);
-            case 1:
-                return new PktLine(PktLineKind.Delimiter, default);
-            case 2:
-                return new PktLine(PktLineKind.ResponseEnd, default);
-            case 3:
-                throw new ProtocolException("Malformed pkt-line: invalid length");
+            return control;
         }
 
         var payload = length - 4;
@@ -106,6 +88,102 @@ internal sealed class PktLineReader(ReadOnlyMemory<byte> buffer)
         _position += payload;
 
         return new PktLine(PktLineKind.Data, result);
+    }
+
+    /// <summary>
+    /// Parses the four hexadecimal digits at the beginning of a pkt-line.
+    /// </summary>
+    internal static int ParseLength(ReadOnlySpan<byte> header)
+    {
+        var length = 0;
+
+        foreach (var c in header)
+        {
+            var digit = c switch
+            {
+                >= (byte)'0' and <= (byte)'9' => c - '0',
+                >= (byte)'a' and <= (byte)'f' => c - 'a' + 10,
+                >= (byte)'A' and <= (byte)'F' => c - 'A' + 10,
+                _ => throw new ProtocolException("Malformed pkt-line: invalid length")
+            };
+
+            length = (length << 4) | digit;
+        }
+
+        return length;
+    }
+
+    /// <summary>
+    /// Checks whether the given length denotes a control packet without payload.
+    /// </summary>
+    internal static bool TryGetControl(int length, out PktLine line)
+    {
+        switch (length)
+        {
+            case 0:
+                line = new PktLine(PktLineKind.Flush, default);
+                return true;
+            case 1:
+                line = new PktLine(PktLineKind.Delimiter, default);
+                return true;
+            case 2:
+                line = new PktLine(PktLineKind.ResponseEnd, default);
+                return true;
+            case 3:
+                throw new ProtocolException("Malformed pkt-line: invalid length");
+        }
+
+        line = default;
+        return false;
+    }
+
+}
+
+/// <summary>
+/// Reads pkt-lines from a buffer that might be too large to be kept in
+/// memory (e.g. the commands of a push, followed by the pack).
+/// </summary>
+internal sealed class SpooledPktLineReader(SpooledBuffer buffer)
+{
+
+    /// <summary>
+    /// The position of the data that has not been read yet.
+    /// </summary>
+    public long Position { get; private set; }
+
+    public PktLine Read()
+    {
+        if (Position >= buffer.Length)
+        {
+            return new PktLine(PktLineKind.End, default);
+        }
+
+        Span<byte> header = stackalloc byte[4];
+
+        if (buffer.Read(Position, header) != header.Length)
+        {
+            throw new ProtocolException("Malformed pkt-line: truncated length");
+        }
+
+        var length = PktLineReader.ParseLength(header);
+
+        Position += 4;
+
+        if (PktLineReader.TryGetControl(length, out var control))
+        {
+            return control;
+        }
+
+        var payload = new byte[length - 4];
+
+        if (buffer.Read(Position, payload) != payload.Length)
+        {
+            throw new ProtocolException("Malformed pkt-line: truncated payload");
+        }
+
+        Position += payload.Length;
+
+        return new PktLine(PktLineKind.Data, payload);
     }
 
 }
